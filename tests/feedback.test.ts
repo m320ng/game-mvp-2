@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEPTH } from '../src/game/constants';
-import { comboFeedbackText, multiCoreFeedbackText } from '../src/game/feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText } from '../src/game/feedback';
 
 describe('feedback helpers', () => {
   it('formats visible combo tiers for chained cuts', () => {
@@ -13,6 +13,17 @@ describe('feedback helpers', () => {
     expect(multiCoreFeedbackText(1)).toBeNull();
     expect(multiCoreFeedbackText(2)).toBe('2 CORES CUT');
     expect(multiCoreFeedbackText(3)).toBe('3 CORES CUT');
+  });
+
+  it('uses a compact non-pulsing battle banner layout', () => {
+    const early = battleBannerLayout(1.5, 0);
+    const later = battleBannerLayout(1.5, 999);
+
+    expect(early.w).toBe(276);
+    expect(early.h).toBe(48);
+    expect(later.w).toBe(early.w);
+    expect(later.h).toBe(early.h);
+    expect(early.textY).toBe(early.y + early.h / 2 - 2);
   });
 
   it('keeps y-sorted characters and effects below HUD and overlays', () => {

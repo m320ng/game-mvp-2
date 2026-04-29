@@ -3,7 +3,7 @@ import { BOT_H, CORE_X, DEPTH, FIELD, H, HERO_HOME_X, HERO_HOME_Y, TAU, TOP_H, W
 import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
-import { comboFeedbackText, multiCoreFeedbackText } from './feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText } from './feedback';
 import { chipPalette, createChipShards } from './chipShards';
 import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
@@ -82,17 +82,17 @@ export class GameScene extends Phaser.Scene {
       const t = this.add.text(x, y, '', { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color }).setOrigin(align === 'center' ? 0.5 : align === 'right' ? 1 : 0, 0.5);
       this.ui.add(t); return t;
     };
-    this.hud.timer = make(W/2, 26, 20, '#e8fbff', 'center');
-    this.hud.battle = make(W/2, 48, 11, 'rgba(232,251,255,.7)', 'center');
-    this.hud.score = make(W-18, 52, 13, '#dffcff', 'right');
-    this.hud.combo = make(W-18, 92, 30, '#fff3a8', 'right');
-    this.hud.sense = make(W/2, TOP_H + 86, 13, '#fff3a8', 'center');
-    this.hud.coreLabel = make(28, 24, 10, '#ffb8c4');
-    this.hud.xpLabel = make(28, 60, 10, '#b8ffd5');
-    this.hud.overdriveLabel = make(W - 166, 25, 10, '#ffe889');
-    this.hud.panelTitle = make(18, TOP_H + 18, 15, '#bdefff');
-    this.hud.panelHelp1 = make(18, TOP_H + 40, 11, 'rgba(218,246,255,.75)', 'left');
-    this.hud.panelHelp2 = make(18, TOP_H + 57, 11, 'rgba(218,246,255,.75)', 'left');
+    this.hud.timer = make(W/2, 24, 20, '#e8fbff', 'center');
+    this.hud.battle = make(W/2, 45, 11, 'rgba(232,251,255,.7)', 'center');
+    this.hud.score = make(W-18, 49, 13, '#dffcff', 'right');
+    this.hud.combo = make(W-18, 88, 30, '#fff3a8', 'right');
+    this.hud.sense = make(W/2, TOP_H + 83, 13, '#fff3a8', 'center');
+    this.hud.coreLabel = make(28, 22, 10, '#ffb8c4');
+    this.hud.xpLabel = make(28, 58, 10, '#b8ffd5');
+    this.hud.overdriveLabel = make(W - 166, 23, 10, '#ffe889');
+    this.hud.panelTitle = make(18, TOP_H + 16, 15, '#bdefff');
+    this.hud.panelHelp1 = make(18, TOP_H + 38, 11, 'rgba(218,246,255,.75)', 'left');
+    this.hud.panelHelp2 = make(18, TOP_H + 55, 11, 'rgba(218,246,255,.75)', 'left');
   }
 
   private resetState() {
@@ -513,20 +513,13 @@ export class GameScene extends Phaser.Scene {
   private drawOverlay(g:Phaser.GameObjects.Graphics){ this.overlay.removeAll(true); if(this.state.status==='start') this.drawStartOverlay(g); if(this.state.status==='choice') this.drawChoiceOverlay(g); if(this.state.status==='win'||this.state.status==='lose') this.drawResultOverlay(g); if(this.state.battleBanner>0 && this.state.status==='running') this.drawBattleBanner(g); }
   private overlayText(x:number,y:number,text:string,size:number,color:string,style='900',origin=.5){ const t=this.add.text(x,y,text,{fontFamily:'system-ui, sans-serif',fontSize:`${size}px`,fontStyle:style,color,align:'center',wordWrap:{width:470}}).setOrigin(origin).setDepth(DEPTH.OVERLAY_TEXT); this.overlay.add(t); return t; }
   private drawBattleBanner(g: Phaser.GameObjects.Graphics) {
-    const progress = clamp(this.state.battleBanner / 1.8, 0, 1);
-    const a = Math.min(1, this.state.battleBanner * 1.35);
-    const pulse = 1 + Math.sin(this.state.time * 18) * 0.018;
-    const w = 324 * pulse;
-    const h = 66 * pulse;
-    const x = W / 2 - w / 2;
-    const y = 82 - (1 - progress) * 10;
-    g.fillStyle(0x02050a, .32 * a).fillRect(0, 0, W, TOP_H);
-    g.fillStyle(0x06111c, .88 * a).fillRoundedRect(x, y, w, h, 20);
-    g.fillStyle(0xfff3a8, .10 * a).fillRoundedRect(x + 8, y + 8, w - 16, h - 16, 15);
-    g.lineStyle(4, 0xfff3a8, .18 * a).strokeRoundedRect(x - 5, y - 5, w + 10, h + 10, 24);
-    g.lineStyle(2.5, 0xfff3a8, .82 * a).strokeRoundedRect(x, y, w, h, 20);
-    g.lineStyle(1.5, 0x7ff0ff, .58 * a).strokeRoundedRect(x + 10, y + 10, w - 20, h - 20, 14);
-    g.lineStyle(2, 0xffffff, .28 * a).lineBetween(x + 28, y + h / 2, x + 88, y + h / 2).lineBetween(x + w - 88, y + h / 2, x + w - 28, y + h / 2);
+    const banner = battleBannerLayout(this.state.battleBanner, this.state.time, W);
+    const { x, y, w, h, radius, alpha: a } = banner;
+    g.fillStyle(0x02050a, .34 * a).fillRoundedRect(x + 4, y + 5, w, h, radius);
+    g.fillStyle(0x06111c, .88 * a).fillRoundedRect(x, y, w, h, radius);
+    g.fillStyle(0xfff3a8, .07 * a).fillRoundedRect(x + 6, y + 6, w - 12, h - 12, 10);
+    g.lineStyle(2, 0xfff3a8, .74 * a).strokeRoundedRect(x, y, w, h, radius);
+    g.lineStyle(1, 0x7ff0ff, .42 * a).strokeRoundedRect(x + 7, y + 7, w - 14, h - 14, 10);
   }
 
   private drawStartOverlay(g:Phaser.GameObjects.Graphics){
@@ -576,5 +569,5 @@ export class GameScene extends Phaser.Scene {
     this.overlayText(W/2,374,'터치 / Space / R 로 다시 플레이',15,'rgba(232,251,255,.86)','800');
   }
 
-  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText('좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText('가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0 && this.state.status==='running'){ this.overlayText(W/2,124,this.state.battleBannerText,23,'#fff3a8'); } }
+  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText('좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText('가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0 && this.state.status==='running'){ this.overlayText(W/2,battleBannerLayout(this.state.battleBanner, this.state.time, W).textY,this.state.battleBannerText,21,'#fff3a8'); } }
 }
