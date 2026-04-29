@@ -29,3 +29,12 @@ export function transientMessageLayout(topH = 500) {
     instruction: { x: 270, y: topH + 172, priority: 10, duration: 0.58, size: 13 },
   } as const;
 }
+
+export function upgradeCardTextLayout(cardY: number) {
+  const baselineCorrection = -3;
+  return {
+    number: { xOffset: 36, y: cardY + 42 + baselineCorrection, origin: [0.5, 0.5] as const },
+    title: { xOffset: 70, y: cardY + 28 + baselineCorrection, origin: [0, 0.5] as const },
+    description: { xOffset: 70, y: cardY + 55 + baselineCorrection, origin: [0, 0.5] as const },
+  };
+}

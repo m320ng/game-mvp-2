@@ -3,7 +3,7 @@ import { BOT_H, CORE_X, DEPTH, FIELD, H, HERO_HOME_X, HERO_HOME_Y, TAU, TOP_H, W
 import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
-import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout } from './feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout, upgradeCardTextLayout } from './feedback';
 import { chipPalette, createChipShards } from './chipShards';
 import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
@@ -545,7 +545,7 @@ export class GameScene extends Phaser.Scene {
 
   private drawParticles(g:Phaser.GameObjects.Graphics){ for(const p of this.particles){ const a=clamp(p.life/p.maxLife,0,1); g.fillStyle(Phaser.Display.Color.HexStringToColor(p.color).color,a).fillCircle(p.x,p.y,p.size*(.6+a)); } }
   private drawOverlay(g:Phaser.GameObjects.Graphics){ this.overlay.removeAll(true); if(this.state.status==='start') this.drawStartOverlay(g); if(this.state.status==='choice') this.drawChoiceOverlay(g); if(this.state.status==='win'||this.state.status==='lose') this.drawResultOverlay(g); if(this.state.battleBanner>0 && this.state.status==='running') this.drawBattleBanner(g); }
-  private overlayText(x:number,y:number,text:string,size:number,color:string,style='900',origin=.5){ const t=this.add.text(x,y,text,{fontFamily:'system-ui, sans-serif',fontSize:`${size}px`,fontStyle:style,color,align:'center',wordWrap:{width:470}}).setOrigin(origin).setDepth(DEPTH.OVERLAY_TEXT); this.overlay.add(t); return t; }
+  private overlayText(x:number,y:number,text:string,size:number,color:string,style='900',origin: number | readonly [number, number]=.5){ const t=this.add.text(x,y,text,{fontFamily:'system-ui, sans-serif',fontSize:`${size}px`,fontStyle:style,color,align:'center',wordWrap:{width:470}}); if (Array.isArray(origin)) t.setOrigin(origin[0], origin[1]); else t.setOrigin(origin as number); t.setDepth(DEPTH.OVERLAY_TEXT); this.overlay.add(t); return t; }
   private drawBattleBanner(g: Phaser.GameObjects.Graphics) {
     const banner = battleBannerLayout(this.state.battleBanner, this.state.time, W);
     const { x, y, w, h, radius, alpha: a } = banner;
@@ -586,8 +586,9 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(1,0xffffff,.12).strokeRoundedRect(x+6,y+6,w-12,h-12,13);
       g.fillStyle(0xfff4a8,.16).fillCircle(x+36,y+42,23);
       g.lineStyle(2,0xfff4a8,.48).strokeCircle(x+36,y+42,23);
-      this.overlayText(x+36,y+49,String(i+1),22,'#fff4a8');
-      if(opt){ this.overlayText(x+70,y+31,opt.title,16,'#eaffff','900',0); this.overlayText(x+70,y+58,opt.desc,13,'rgba(230,250,255,.82)','700',0); }
+      const textLayout = upgradeCardTextLayout(y);
+      this.overlayText(x + textLayout.number.xOffset, textLayout.number.y, String(i+1), 22, '#fff4a8', '900', textLayout.number.origin);
+      if(opt){ this.overlayText(x + textLayout.title.xOffset, textLayout.title.y, opt.title, 16, '#eaffff', '900', textLayout.title.origin); this.overlayText(x + textLayout.description.xOffset, textLayout.description.y, opt.desc, 13, 'rgba(230,250,255,.82)', '700', textLayout.description.origin); }
     }
   }
   private drawResultOverlay(g:Phaser.GameObjects.Graphics){

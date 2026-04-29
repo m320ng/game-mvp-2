@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEPTH } from '../src/game/constants';
-import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout } from '../src/game/feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout, upgradeCardTextLayout } from '../src/game/feedback';
 
 describe('feedback helpers', () => {
   it('formats visible combo tiers for chained cuts', () => {
@@ -24,6 +24,17 @@ describe('feedback helpers', () => {
     expect(later.w).toBe(early.w);
     expect(later.h).toBe(early.h);
     expect(early.textY).toBe(early.y + early.h / 2 - 2);
+  });
+
+  it('positions upgrade card text around visual centers with baseline correction', () => {
+    const layout = upgradeCardTextLayout(500 + 82);
+
+    expect(layout.number.origin).toEqual([0.5, 0.5]);
+    expect(layout.number.y).toBe(500 + 82 + 42 - 3);
+    expect(layout.title.origin).toEqual([0, 0.5]);
+    expect(layout.description.origin).toEqual([0, 0.5]);
+    expect(layout.title.y).toBeLessThan(500 + 82 + 31);
+    expect(layout.description.y).toBeLessThan(500 + 82 + 58);
   });
 
   it('reserves non-overlapping transient message lanes', () => {
