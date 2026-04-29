@@ -4,6 +4,7 @@ import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
 import { chipPalette, createChipShards } from './chipShards';
+import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
 
 const ENEMY_STATS: Record<EnemyType, { hp:number; speed:number; cooldown:number; damage:number; range:number; radius:number; score:number; xp:number; mode:'ranged'|'melee'; projectileSpeed?:number; projectileSize?:number; projectileColor?:string }> = {
@@ -16,10 +17,15 @@ const ENEMY_STATS: Record<EnemyType, { hp:number; speed:number; cooldown:number;
 
 export class GameScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
+  private fx!: Phaser.GameObjects.Graphics;
   private ui!: Phaser.GameObjects.Container;
   private overlay!: Phaser.GameObjects.Container;
   private state!: GameState;
   private hero!: Hero;
+  private heroSprite: Phaser.GameObjects.Sprite | null = null;
+  private heroTrailSprites: Phaser.GameObjects.Image[] = [];
+  private enemySprites = new Map<number, Phaser.GameObjects.Sprite>();
+  private deathSprites: Array<{ sprite: Phaser.GameObjects.Sprite; life: number; maxLife: number }> = [];
   private enemies: Enemy[] = [];
   private projectiles: Projectile[] = [];
   private chips: Chip[] = [];
@@ -37,7 +43,9 @@ export class GameScene extends Phaser.Scene {
   constructor() { super('GameScene'); }
 
   create() {
-    this.g = this.add.graphics();
+    registerGeneratedCharacterSprites(this);
+    this.g = this.add.graphics().setDepth(0);
+    this.fx = this.add.graphics().setDepth(5);
     this.ui = this.add.container(0, 0);
     this.overlay = this.add.container(0, 0);
     this.createHudTexts();
@@ -51,6 +59,8 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ONE', () => { if (this.state.status === 'choice') this.applyUpgrade(0); });
     this.input.keyboard?.on('keydown-TWO', () => { if (this.state.status === 'choice') this.applyUpgrade(1); });
     this.input.keyboard?.on('keydown-THREE', () => { if (this.state.status === 'choice') this.applyUpgrade(2); });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.destroyCharacterSprites, this);
+    this.events.once(Phaser.Scenes.Events.DESTROY, this.destroyCharacterSprites, this);
   }
 
   update(_time: number, deltaMs: number) {
@@ -79,6 +89,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private resetState() {
+    this.destroyCharacterSprites();
     this.state = { status: 'start', time: 0, runTime: 100, hp: 115, maxHp: 115, shield: 0, kills: 0, score: 0, level: 1, xp: 0, xpNeed: 8, combo: 0, maxCombo: 0, comboTimer: 0, overdrive: 0, chipSpawn: 0.25, shake: 0, flash: 0, battleIndex: 0, battleSize: 0, battleAlive: 0, battleClearTimer: -1, battleBanner: 0, battleBannerText: '', slashSenseText: '', slashSenseTime: 0, choiceOptions: [], resultLine: '', upg: { skillDamage: 1, heroAtk: 1, heroMove: 1, extraTargets: 0, healBoost: 1, comboBonus: 0, overdrive: 1, aoe: 1 } };
     this.hero = { x: HERO_HOME_X, y: HERO_HOME_Y, homeX: HERO_HOME_X, homeY: HERO_HOME_Y, facing: 1, attackCd: 0.1, swing: 0, hurt: 0, hitFlash: 0, trail: [], skill: null };
     this.enemies = []; this.projectiles = []; this.chips = []; this.chipShards = []; this.slashes = []; this.particles = []; this.nextId = 1; this.lastGesture = null;
@@ -181,7 +192,7 @@ export class GameScene extends Phaser.Scene {
     else if(info.type==='cross'){ this.hero.skill=this.makeHeroSkill('cross', [{x:focus.x,y:focus.y,target:null,damage:(58+goodCount*5.5)*totalMult,angle:0,radius:110*aoe,slashLen:84*profile.slashLenMult}], overdrive); }
     else if(info.type==='xslash'){ const target=this.enemies.filter(e=>!e.dead).sort((a,b)=>((b.isRanged?70:0)+b.hp*1.1-dist(b.x,b.y,focus.x,focus.y)*.25)-((a.isRanged?70:0)+a.hp*1.1-dist(a.x,a.y,focus.x,focus.y)*.25))[0]; if(target) this.hero.skill=this.makeHeroSkill('xslash', [{x:target.x-12,y:target.y,target,damage:(74+goodCount*7)*totalMult,angle:info.angle,slashLen:86*profile.slashLenMult}], overdrive); }
   }
-  private dealEnemyDamage(enemy: Enemy | null, amount:number, color?:string){ if(!enemy || enemy.dead) return; enemy.hp-=amount; enemy.hurt=.12; enemy.hitFlash=.16; this.addParticle(enemy.x,enemy.y-10,color||'#eaffff',8,95,3,.35); this.addText(String(Math.round(amount)),enemy.x,enemy.y-28,'#faffff',14); this.tones.tone(150,.05,'square',.032,-40); if(enemy.hp<=0){ enemy.dead=true; this.state.kills++; this.state.score+=Math.round(enemy.score*(1+this.state.combo*.01)); this.state.overdrive=clamp(this.state.overdrive+(enemy.type==='warden'?30:6),0,110); this.addXP(enemy.xp||.6); this.addParticle(enemy.x,enemy.y-4,enemy.type==='warden'?'#ffd17c':'#ff9f71',18,180,4,.6); if(enemy.type==='warden') this.addText('WARDEN DOWN',enemy.x,enemy.y-40,'#ffd17c',18); } }
+  private dealEnemyDamage(enemy: Enemy | null, amount:number, color?:string){ if(!enemy || enemy.dead) return; enemy.hp-=amount; enemy.hurt=.12; enemy.hitFlash=.16; this.addParticle(enemy.x,enemy.y-10,color||'#eaffff',8,95,3,.35); this.addText(String(Math.round(amount)),enemy.x,enemy.y-28,'#faffff',14); this.tones.tone(150,.05,'square',.032,-40); if(enemy.hp<=0){ enemy.dead=true; this.spawnEnemyDeathSprite(enemy); this.state.kills++; this.state.score+=Math.round(enemy.score*(1+this.state.combo*.01)); this.state.overdrive=clamp(this.state.overdrive+(enemy.type==='warden'?30:6),0,110); this.addXP(enemy.xp||.6); this.addParticle(enemy.x,enemy.y-4,enemy.type==='warden'?'#ffd17c':'#ff9f71',18,180,4,.6); if(enemy.type==='warden') this.addText('WARDEN DOWN',enemy.x,enemy.y-40,'#ffd17c',18); } }
 
   private heroAutoAttack(dt:number){ if(this.hero.skill) return; this.hero.hitFlash=Math.max(0,this.hero.hitFlash-dt); this.hero.hurt=Math.max(0,this.hero.hurt-dt); this.hero.attackCd-=dt*this.state.upg.heroAtk; this.hero.swing=Math.max(0,this.hero.swing-dt); const alive=this.enemies.filter(e=>!e.dead); if(!alive.length){ this.hero.x=lerp(this.hero.x,this.hero.homeX,dt*4.5); this.hero.y=lerp(this.hero.y,this.hero.homeY,dt*4.5); return; } const target=alive.sort((a,b)=>dist(this.hero.x,this.hero.y,a.x,a.y)-dist(this.hero.x,this.hero.y,b.x,b.y))[0]; const dx=target.x-this.hero.x, dy=target.y-this.hero.y, d=Math.hypot(dx,dy)||1; this.hero.facing=dx>=0?1:-1; if(d>36){ const move=130*this.state.upg.heroMove; this.hero.x+=dx/d*move*dt; this.hero.y+=dy/d*move*dt; } else if(this.hero.attackCd<=0){ this.hero.attackCd=.54; this.hero.swing=.22; this.createSlash(this.hero.x+this.hero.facing*20,this.hero.y-6,this.hero.facing>0?-.45:Math.PI+.45,58,'#dffcff',.22,7); this.dealEnemyDamage(target,14,'#dffcff'); } this.hero.x=clamp(this.hero.x,FIELD.x+10,FIELD.x+FIELD.w-18); this.hero.y=clamp(this.hero.y,FIELD.y+18,FIELD.y+FIELD.h-18); }
   private updateHeroSkill(dt:number){ const skill=this.hero.skill; if(!skill) return; const fromX=skill.seg===0?skill.startX:skill.points[skill.seg-1].x; const fromY=skill.seg===0?skill.startY:skill.points[skill.seg-1].y; const to=skill.points[skill.seg]; const segDur=to.settle?.12:.10; skill.segT+=dt; const p=easeOutCubic(skill.segT/segDur); this.hero.x=lerp(fromX,to.x,p); this.hero.y=lerp(fromY,to.y,p); this.hero.facing=(to.x-fromX)>=0?1:-1; this.hero.trail.push({x:this.hero.x,y:this.hero.y,life:.18}); if(this.hero.trail.length>6) this.hero.trail.shift(); if(skill.segT>=segDur){ if(!to.settle && !to.resolved){ to.resolved=true; if(skill.type==='cross'){ const radius=to.radius||110; for(const e of this.enemies) if(!e.dead && dist(e.x,e.y,to.x,to.y)<radius+e.radius) this.dealEnemyDamage(e,to.damage,skill.overdrive?'#fff2a8':'#dffcff'); const len=to.slashLen||84*this.state.upg.aoe; this.createSlash(to.x,to.y,.68,len,skill.overdrive?'#fff2a8':'#dffcff',.28,8); this.createSlash(to.x,to.y,-.68,len,skill.overdrive?'#fff2a8':'#dffcff',.28,8); } else if(skill.type==='xslash'){ this.dealEnemyDamage(to.target,to.damage,skill.overdrive?'#fff2a8':'#e7d7ff'); const len=to.slashLen||86; this.createSlash(to.x+4,to.y-8,.72,len,skill.overdrive?'#fff2a8':'#e7d7ff',.30,8); this.createSlash(to.x+4,to.y-8,-.72,len,skill.overdrive?'#fff2a8':'#e7d7ff',.30,8); this.addParticle(to.x,to.y-6,skill.overdrive?'#fff2a8':'#d8c7ff',18,170,4,.42); } else { this.dealEnemyDamage(to.target,to.damage,skill.overdrive?'#fff2a8':'#dffcff'); this.createSlash(to.x+8,to.y-8,to.angle,to.slashLen||(skill.type==='vertical'?74:58),skill.overdrive?'#fff2a8':'#dffcff',.24,7); } } skill.seg++; skill.segT=0; if(skill.seg>=skill.points.length){ this.hero.skill=null; this.hero.x=clamp(this.hero.x,FIELD.x+10,FIELD.x+FIELD.w-18); this.hero.y=clamp(this.hero.y,FIELD.y+18,FIELD.y+FIELD.h-18); } } }
@@ -191,19 +202,122 @@ export class GameScene extends Phaser.Scene {
   private processGesture(info: GestureInfo, hitChips: Chip[]){ const good: Chip[]=[]; const bad: Chip[]=[]; for(const c of hitChips){ c.marked=false; c.sliced=true; c.sliceAngle=Number.isFinite(c.hitAngle)?c.hitAngle:info.angle; c.pop=0; this.spawnChipShards(c); this.addParticle(c.x,c.y,c.kind==='glitch'?'#ff436a':'#dffcff',c.kind==='glitch'?16:12,150,3.8,.36); this.tones.tone(c.kind==='glitch'?120:760,.045,'triangle',c.kind==='glitch'?.045:.028,c.kind==='glitch'?-20:120); (c.kind==='glitch'?bad:good).push(c); } for(const c of bad){ this.damagePlayer(12); this.addParticle(c.x,c.y,'#ff406a',20,190,5,.6); this.addText('GLITCH',c.x,c.y-24,'#ff5b7a',17); this.state.combo=0; this.state.comboTimer=0; } this.setSlashSense(info,''); if(good.length>0){ let mult=1+Math.min(.65,this.state.combo*(.022+this.state.upg.comboBonus))+Math.min(.25,(good.length-1)*.08); const repairCount=good.filter(c=>c.kind==='repair').length; const surgeCount=good.filter(c=>c.kind==='surge').length; if(repairCount) this.healPlayer(repairCount*5*this.state.upg.healBoost); if(surgeCount){ this.state.overdrive=clamp(this.state.overdrive+surgeCount*18,0,120); this.addText('SURGE',info.mx,info.my-24,'#f3d46b',16); } this.state.overdrive=clamp(this.state.overdrive+good.length*3,0,120); let overdrive=false; if(this.state.overdrive>=100){ this.state.overdrive-=100; mult*=1.75; overdrive=true; this.state.flash=Math.max(this.state.flash,.2); this.addText('OVERDRIVE',W/2,TOP_H+22,'#fff2a8',22); } this.state.combo+=good.length; this.state.maxCombo=Math.max(this.state.maxCombo,this.state.combo); this.state.comboTimer=3; this.state.score+=Math.round(16*good.length*(1+this.state.combo*.05)); this.addXP(.28*good.length); this.triggerDirective(info,good.length,mult,overdrive); } this.rememberGesture(info); }
 
   private updateRun(dt:number){ this.state.time+=dt; if(this.state.comboTimer>0){ this.state.comboTimer-=dt; if(this.state.comboTimer<=0) this.state.combo=0; } this.state.battleBanner=Math.max(0,this.state.battleBanner-dt); this.state.chipSpawn-=dt; const chipInterval=clamp(.64-this.state.time*.002,.34,.64); if(this.state.chipSpawn<=0){ this.spawnChip(false); this.state.chipSpawn=chipInterval; } for(const c of this.chips){ c.age+=dt; if(!c.sliced){ c.x+=c.vx*dt; c.y+=c.vy*dt; c.vy+=c.g*dt; c.rot+=c.spin*dt; if(c.x<42||c.x>W-42) c.vx*=-.88; c.x=clamp(c.x,42,W-42); } else c.pop+=dt*6; if(c.markedPulse>0) c.markedPulse=Math.max(0,c.markedPulse-dt*4.5); if(c.y>H+60||c.pop>1) c.remove=true; } this.chips=this.chips.filter(c=>!c.remove); if(this.pointerState.down){ this.evaluatePointerGesture(); this.commitPointerGesture(false); } this.updateHeroSkill(dt); this.heroAutoAttack(dt); for(const t of this.hero.trail) t.life-=dt; this.hero.trail=this.hero.trail.filter(t=>t.life>0); this.updateEnemies(dt); this.updateProjectiles(dt); if(this.state.battleClearTimer>=0){ this.state.battleClearTimer-=dt; if(this.state.battleClearTimer<=0&&this.state.status==='running') this.beginNextBattle(); } if(this.state.time>=this.state.runTime&&this.state.status==='running'){ this.state.status='win'; this.state.resultLine=`전투 ${this.state.battleIndex}개 구역을 돌파하고 ${this.state.kills}명을 처치했습니다.`; this.tones.tone(640,.12,'triangle',.06,180); } }
-  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; item.text.setPosition(f.x,f.y).setAlpha(clamp(f.life/f.maxLife,0,1)); } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
+  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const death of this.deathSprites){ death.life-=dt; const a=clamp(death.life/death.maxLife,0,1); death.sprite.setAlpha(a*.72).setY(death.sprite.y-dt*10).setScale(death.sprite.scaleX*.985, death.sprite.scaleY*.985); } this.deathSprites=this.deathSprites.filter(death=>{ if(death.life>0) return true; death.sprite.destroy(); return false; }); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; item.text.setPosition(f.x,f.y).setAlpha(clamp(f.life/f.maxLife,0,1)); } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
 
-  private renderFrame(){ const g=this.g; g.clear(); this.drawTop(g); this.drawBottom(g); this.drawParticles(g); this.drawOverlay(g); this.updateHudTexts(); }
+  private renderFrame(){ const g=this.g, fx=this.fx; g.clear(); fx.clear(); this.drawTop(g); this.drawBottom(g); this.syncCharacterSprites(); this.drawCharacterForeground(fx); this.drawParticles(fx); this.drawOverlay(g); this.updateHudTexts(); }
+
+  private syncCharacterSprites() {
+    const visible = this.state.status === 'running';
+    this.syncHeroSprite(visible);
+    this.syncHeroAfterimages(visible);
+    this.syncEnemySprites(visible);
+  }
+
+  private syncHeroSprite(visible: boolean) {
+    if (!this.heroSprite) {
+      this.heroSprite = this.add.sprite(this.hero.x, this.hero.y, characterTextureKey('hero'), 0).setOrigin(0.5, 0.78).setDepth(3.2);
+      this.heroSprite.setScale(CHARACTER_SPRITE_SPECS.hero.scale);
+    }
+    this.heroSprite.setVisible(visible);
+    if (!visible) return;
+    const state = this.hero.hitFlash > 0 ? 'hit' : (this.hero.skill || this.hero.swing > 0 ? 'slash' : this.heroMoving() ? 'run' : 'idle');
+    this.playCharacterAnimation(this.heroSprite, 'hero', state);
+    this.heroSprite
+      .setPosition(this.hero.x, this.hero.y)
+      .setFlipX(this.hero.facing < 0)
+      .setDepth(3 + this.hero.y / 1000)
+      .setAlpha(1)
+      .setTint(this.hero.hitFlash > 0 ? 0xffffff : 0xffffff);
+  }
+
+  private heroMoving() {
+    if (this.hero.skill) return true;
+    return dist(this.hero.x, this.hero.y, this.hero.homeX, this.hero.homeY) > 8 || this.enemies.some(e => !e.dead);
+  }
+
+  private syncHeroAfterimages(visible: boolean) {
+    while (this.heroTrailSprites.length < this.hero.trail.length) {
+      this.heroTrailSprites.push(this.add.image(0, 0, characterTextureKey('hero'), 8).setOrigin(0.5, 0.78).setDepth(2.8).setScale(CHARACTER_SPRITE_SPECS.hero.scale).setTint(0x9ff6ff));
+    }
+    while (this.heroTrailSprites.length > this.hero.trail.length) this.heroTrailSprites.pop()?.destroy();
+    for (let i = 0; i < this.heroTrailSprites.length; i++) {
+      const trail = this.hero.trail[i];
+      const sprite = this.heroTrailSprites[i];
+      sprite.setVisible(visible && !!trail);
+      if (!visible || !trail) continue;
+      sprite.setPosition(trail.x, trail.y).setFlipX(this.hero.facing < 0).setAlpha(clamp(trail.life / .18, 0, 1) * .35).setDepth(2.6 + trail.y / 1000);
+    }
+  }
+
+  private syncEnemySprites(visible: boolean) {
+    const aliveIds = new Set<number>();
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      aliveIds.add(enemy.id);
+      let sprite = this.enemySprites.get(enemy.id);
+      if (!sprite) {
+        sprite = this.add.sprite(enemy.x, enemy.y, characterTextureKey(enemy.type), 0).setOrigin(0.5, 0.78).setDepth(3);
+        sprite.setScale(CHARACTER_SPRITE_SPECS[enemy.type].scale);
+        this.enemySprites.set(enemy.id, sprite);
+      }
+      sprite.setVisible(visible);
+      if (!visible) continue;
+      const moving = Math.hypot(enemy.vx, enemy.vy) > 2;
+      const state = enemy.hitFlash > 0 ? 'hit' : enemy.swing > 0 ? 'attack' : moving ? 'move' : 'idle';
+      this.playCharacterAnimation(sprite, enemy.type, state);
+      sprite
+        .setPosition(enemy.x, enemy.y)
+        .setFlipX(enemy.facing < 0)
+        .setDepth(3 + enemy.y / 1000)
+        .setTint(enemy.hitFlash > 0 ? 0xffffff : 0xffffff)
+        .setAlpha(1);
+    }
+    for (const [id, sprite] of this.enemySprites) {
+      if (aliveIds.has(id)) continue;
+      sprite.destroy();
+      this.enemySprites.delete(id);
+    }
+  }
+
+  private playCharacterAnimation(sprite: Phaser.GameObjects.Sprite, kind: 'hero', state: 'idle' | 'run' | 'slash' | 'hit'): void;
+  private playCharacterAnimation(sprite: Phaser.GameObjects.Sprite, kind: EnemyType, state: 'idle' | 'move' | 'attack' | 'hit' | 'death'): void;
+  private playCharacterAnimation(sprite: Phaser.GameObjects.Sprite, kind: 'hero' | EnemyType, state: string) {
+    const key = characterAnimationKey(kind, state as 'idle' | 'run' | 'slash' | 'move' | 'attack' | 'hit' | 'death');
+    if (sprite.anims.currentAnim?.key !== key) sprite.play(key, true);
+  }
+
+  private spawnEnemyDeathSprite(enemy: Enemy) {
+    const livingSprite = this.enemySprites.get(enemy.id);
+    const sprite = this.add.sprite(enemy.x, enemy.y, characterTextureKey(enemy.type), 12)
+      .setOrigin(0.5, 0.78)
+      .setDepth(2.9 + enemy.y / 1000)
+      .setScale(CHARACTER_SPRITE_SPECS[enemy.type].scale)
+      .setFlipX(enemy.facing < 0)
+      .setTint(enemy.type === 'warden' ? 0xffd17c : 0xffb17d);
+    sprite.play(characterAnimationKey(enemy.type, 'death'));
+    if (livingSprite) {
+      livingSprite.destroy();
+      this.enemySprites.delete(enemy.id);
+    }
+    this.deathSprites.push({ sprite, life: .42, maxLife: .42 });
+  }
+
+  private destroyCharacterSprites() {
+    this.heroSprite?.destroy();
+    this.heroSprite = null;
+    this.heroTrailSprites.forEach(sprite => sprite.destroy());
+    this.heroTrailSprites = [];
+    this.enemySprites.forEach(sprite => sprite.destroy());
+    this.enemySprites.clear();
+    this.deathSprites.forEach(({ sprite }) => sprite.destroy());
+    this.deathSprites = [];
+  }
   private drawTop(g: Phaser.GameObjects.Graphics){
     g.fillGradientStyle(0x202838, 0x202838, 0x0d121b, 0x0d121b, 1, 1, 1, 1).fillRect(0,0,W,TOP_H);
     g.fillStyle(0x5fe2ff, .05).fillTriangle(0, 0, W, 0, W * .56, TOP_H);
     this.drawField(g);
     this.drawCore(g);
-    this.drawEnemies(g);
     this.drawProjectiles(g);
-    this.drawHero(g);
-    this.drawSlashes(g);
-    this.drawHudBars(g);
     if(this.state.battleBanner>0){
       const a=Math.min(1,this.state.battleBanner*1.25);
       g.fillStyle(0x06111c,.68*a).fillRoundedRect(W/2-144,88,288,54,18);
@@ -216,22 +330,8 @@ export class GameScene extends Phaser.Scene {
 
   private drawField(g: Phaser.GameObjects.Graphics){ g.fillStyle(0x151b24).fillRoundedRect(FIELD.x,FIELD.y,FIELD.w,FIELD.h,22); g.fillStyle(0xffffff,.025); for(let i=0;i<150;i++) g.fillRect(FIELD.x+(i*73)%FIELD.w, FIELD.y+((i*47)%FIELD.h),4,4); g.lineStyle(1,0x6e8caa,.08); for(let x=FIELD.x+18;x<FIELD.x+FIELD.w;x+=34) g.lineBetween(x,FIELD.y+10,x+Math.sin(x)*8,FIELD.y+FIELD.h-10); for(let i=0;i<9;i++){ const x=FIELD.x+62+i*54+(i%2?12:-10), y=FIELD.y+54+(i%4)*92; g.fillStyle(0xffffff,.035).fillCircle(x,y,16+(i%2)*5); g.fillStyle(0x000000,.16).fillCircle(x+6,y+4,9+(i%2)*3); } }
   private drawCore(g: Phaser.GameObjects.Graphics){ g.fillStyle(0x2b3947).fillRoundedRect(CORE_X-22,HERO_HOME_Y-34,34,68,8); g.fillStyle(0x5fe2ff).fillRect(CORE_X-14,HERO_HOME_Y-22,10,44); g.fillStyle(0x5fe2ff,.25).fillCircle(CORE_X-9,HERO_HOME_Y,20); }
-  private drawSprite(g:Phaser.GameObjects.Graphics,type:string,x:number,y:number,facing:number,scale=1,tint?:number,swing=0){
-    const rx = (px:number,w:number) => facing > 0 ? x + px * scale : x - (px + w) * scale;
-    const ry = (py:number) => y + py * scale;
-    const rect = (px:number, py:number, w:number, h:number, color:number) => g.fillStyle(color).fillRect(rx(px,w), ry(py), w*scale, h*scale);
-    const stroke = (px:number, py:number, w:number, h:number) => g.lineStyle(2,0x12151c,.9).strokeRect(rx(px,w), ry(py), w*scale, h*scale);
-    g.fillStyle(0x000000,.22).fillEllipse(x,y+13*scale,18*scale,8*scale);
-    const body=tint ?? (type==='hero'?0x25232c:type.includes('warden')?0x8a7e73:type.includes('brute')?0xaeb8c5:0x705a44);
-    const head=tint ?? (type==='hero'?0xefefef:type.includes('gunner')?0xf08c4d:type.includes('raider')?0xefad39:type.includes('brute')?0xd7dbe2:type.includes('warden')?0xc7bbb0:0xd7b07c);
-    rect(-6,-1,12,16,body); stroke(-6,-1,12,16);
-    rect(-9,-17,18,16,head); stroke(-9,-17,18,16);
-    rect(-6,-12,12,4,0x111820);
-    const accent=tint ?? (type==='hero'?0x6ad7ff:type.includes('warden')?0xff5b46:0xffc67b);
-    rect(6,type==='hero'?-1:-3,9+swing*18,3,accent);
-  }
-  private drawHero(g:Phaser.GameObjects.Graphics){ for(const t of this.hero.trail){ g.setAlpha(t.life/.18*.35); this.drawSprite(g,'hero',t.x,t.y,this.hero.facing,1.14,0xd7f8ff); g.setAlpha(1); } this.drawSprite(g,'hero',this.hero.x,this.hero.y,this.hero.facing,1.16,this.hero.hitFlash>0?0xffffff:undefined,this.hero.swing); }
-  private drawEnemies(g:Phaser.GameObjects.Graphics){ for(const e of this.enemies.slice().sort((a,b)=>a.y-b.y)){ const scale=e.type==='warden'?1.26:e.type==='brute'?1.08:1; this.drawSprite(g,`enemy_${e.type}`,e.x,e.y,e.facing,scale,e.hitFlash>0?0xffffff:undefined,e.swing); if(e.hp<e.maxHp) this.drawMiniBar(g,e.x,e.y-(e.type==='warden'?34:26),e.type==='warden'?42:28,e.hp/e.maxHp,0xff7a6b); } }
+  private drawCharacterForeground(g: Phaser.GameObjects.Graphics){ this.drawSlashes(g); this.drawEnemyBars(g); this.drawHudBars(g); }
+  private drawEnemyBars(g: Phaser.GameObjects.Graphics){ for(const e of this.enemies.slice().sort((a,b)=>a.y-b.y)){ if(e.hp<e.maxHp) this.drawMiniBar(g,e.x,e.y-(e.type==='warden'?34:26),e.type==='warden'?42:28,e.hp/e.maxHp,0xff7a6b); } }
   private drawMiniBar(g:Phaser.GameObjects.Graphics,x:number,y:number,w:number,ratio:number,color:number){ g.fillStyle(0x000000,.45).fillRect(Math.round(x-w/2),Math.round(y),w,4); g.fillStyle(color).fillRect(Math.round(x-w/2),Math.round(y),w*clamp(ratio,0,1),4); }
   private drawProjectiles(g:Phaser.GameObjects.Graphics){ for(const p of this.projectiles){ g.fillStyle(Phaser.Display.Color.HexStringToColor(p.color).color, clamp(p.life/.35,.35,1)).fillCircle(p.x,p.y,p.radius); g.lineStyle(1.2,0xffffff,.45).lineBetween(p.x-p.vx*.02,p.y-p.vy*.02,p.x+p.vx*.005,p.y+p.vy*.005); } }
   private drawSlashes(g:Phaser.GameObjects.Graphics){
