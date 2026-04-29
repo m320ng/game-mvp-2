@@ -17,3 +17,7 @@ The port keeps the original virtual coordinate system and core numeric tuning: 1
 ## Known parity limits
 
 The original used direct Canvas 2D drawing with gradients, pixel-art sprite routines, and canvas text. This Phaser port uses immediate-mode `Graphics` plus Phaser text objects, so some sprite silhouettes, gradients, and glow/shadow effects are approximations. Gameplay rules and coordinates are prioritized over exact draw-call parity.
+
+## Visual polish pass
+
+The second pass adds production-style neon panel treatment for the start, upgrade, battle, HUD, and result surfaces. Chip slicing now creates physical shard halves that split along the actual recognized slash angle, fly apart, rotate, fall, fade, and retain chip role colors.
