@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEPTH } from '../src/game/constants';
-import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText } from '../src/game/feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout } from '../src/game/feedback';
 
 describe('feedback helpers', () => {
   it('formats visible combo tiers for chained cuts', () => {
@@ -24,6 +24,18 @@ describe('feedback helpers', () => {
     expect(later.w).toBe(early.w);
     expect(later.h).toBe(early.h);
     expect(early.textY).toBe(early.y + early.h / 2 - 2);
+  });
+
+  it('reserves non-overlapping transient message lanes', () => {
+    const layout = transientMessageLayout();
+    const ys = [layout.combo.y, layout.multiCore.y, layout.instruction.y, layout.glitch.y];
+
+    expect(new Set(ys).size).toBe(ys.length);
+    expect(Math.abs(layout.glitch.y - layout.combo.y)).toBeGreaterThanOrEqual(30);
+    expect(Math.abs(layout.combo.y - layout.multiCore.y)).toBeGreaterThanOrEqual(30);
+    expect(Math.abs(layout.multiCore.y - layout.instruction.y)).toBeGreaterThanOrEqual(30);
+    expect(layout.glitch.priority).toBeGreaterThan(layout.combo.priority);
+    expect(layout.glitch.priority).toBeGreaterThan(layout.instruction.priority);
   });
 
   it('keeps y-sorted characters and effects below HUD and overlays', () => {

@@ -3,7 +3,7 @@ import { BOT_H, CORE_X, DEPTH, FIELD, H, HERO_HOME_X, HERO_HOME_Y, TAU, TOP_H, W
 import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
-import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText } from './feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout } from './feedback';
 import { chipPalette, createChipShards } from './chipShards';
 import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
@@ -42,6 +42,7 @@ export class GameScene extends Phaser.Scene {
   private tones = new TonePlayer();
   private hud: Record<string, Phaser.GameObjects.Text> = {};
   private floatLabels: Array<{ model: FloatText; text: Phaser.GameObjects.Text }> = [];
+  private transientLabels = new Map<string, { text: Phaser.GameObjects.Text; life: number; maxLife: number; y: number; priority: number }>();
   private upgrades: Upgrade[] = [];
 
   constructor() { super('GameScene'); }
@@ -111,7 +112,7 @@ export class GameScene extends Phaser.Scene {
       { title: 'Overdrive Core', desc: '오버드라이브 피해 +30%', apply: () => { this.state.upg.overdrive *= 1.3; } },
       { title: 'Sweep Arc', desc: '가로/십자 스킬 범위 확대', apply: () => { this.state.upg.aoe *= 1.18; } },
     ];
-    this.floatLabels.forEach(({ text }) => text.destroy()); this.floatLabels = [];
+    this.floatLabels.forEach(({ text }) => text.destroy()); this.floatLabels = []; this.clearTransientLabels();
   }
 
   private startRun() { this.resetState(); this.state.status = 'running'; for (let i = 0; i < 5; i++) this.spawnChip(true); this.beginNextBattle(); this.tones.tone(460, 0.08, 'triangle', 0.04, 140); }
@@ -169,7 +170,7 @@ export class GameScene extends Phaser.Scene {
   private evaluatePointerGesture() { const ps = this.pointerState; if (!ps.down || ps.locked) { ps.readyInfo = null; ps.readyAt = 0; return null; } const info = analyzeGesture(ps.path, this.lastGesture); if (info) { ps.readyInfo = info; if (!ps.readyAt) ps.readyAt = performance.now(); return info; } ps.readyInfo = null; ps.readyAt = 0; return null; }
   private commitPointerGesture(force = false) {
     const ps = this.pointerState; if (!ps.down || ps.locked) return false; const info = ps.readyInfo || this.evaluatePointerGesture(); if (!info) return false; const readyDelay = performance.now() - (ps.readyAt || performance.now()); if (!force && readyDelay < 120) return false;
-    const marked = this.currentMarkedChips(); if (marked.length > 0) { this.processGesture(info, marked); ps.hitIds.clear(); this.addText('손을 떼고 다시 베기', W/2, TOP_H + 128, '#9edffb', 13); } else { this.setSlashSense(info, ' / 코어 없음'); this.rememberGesture(info); this.tones.tone(460, 0.045, 'sine', 0.022, 80); }
+    const marked = this.currentMarkedChips(); if (marked.length > 0) { this.processGesture(info, marked); ps.hitIds.clear(); this.showTransientText('instruction', '손을 떼고 다시 베기', '#9edffb'); } else { this.setSlashSense(info, ' / 코어 없음'); this.rememberGesture(info); this.tones.tone(460, 0.045, 'sine', 0.022, 80); }
     ps.readyInfo = null; ps.readyAt = 0; ps.locked = true; ps.committed = true; if (ps.lastPoint) ps.path = [ps.lastPoint]; return true;
   }
   private rememberGesture(info: GestureInfo) { this.lastGesture = { x1: info.x1, y1: info.y1, x2: info.x2, y2: info.y2, angle: info.angle, time: performance.now(), baseType: info.baseType, dirCode: info.dirCode, family: info.family }; }
@@ -177,7 +178,7 @@ export class GameScene extends Phaser.Scene {
   private spawnChip(initial = false) { const r = Math.random(); let kind: Chip['kind'] = 'blade'; if (r < 0.10 && !initial) kind = 'glitch'; else if (r < 0.25) kind = 'repair'; else if (r < 0.43) kind = 'surge'; this.chips.push({ id: this.nextId++, kind, x: rand(60, W-60), y: initial ? rand(TOP_H+84, H-58) : H+rand(18,46), vx: rand(-62,62), vy: initial ? rand(-80,70) : rand(-800,-620), g: rand(760,920), r: kind === 'glitch' ? rand(23,27) : rand(25,32), rot: rand(0,TAU), spin: rand(-2.6,2.6), age: 0, marked: false, markedPulse: 0, hitAngle: 0, sliceAngle: 0, sliced: false, pop: 0, remove: false }); }
   private addParticle(x:number,y:number,color:string,count=8,speed=120,size=3,life=0.55) { for (let i=0;i<count;i++){ const a=rand(0,TAU); const s=rand(speed*.25,speed); this.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,color,size:rand(size*.5,size),life:rand(life*.55,life),maxLife:life,drag:.9}); } }
   private addText(text:string,x:number,y:number,color='#eaffff',size=18, depth: number=DEPTH.FLOATING_TEXT) { const model: FloatText = { text, x, y, vy: -42, life: .82, maxLife: .82, color, size }; const label = this.add.text(x, y, text, { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color, stroke: '#00000099', strokeThickness: 3 }).setOrigin(.5).setDepth(depth); this.floatLabels.push({ model, text: label }); }
-  private setSlashSense(info: GestureInfo, suffix = '') { const text = slashLabel(info) + suffix; this.state.slashSenseText = text; this.state.slashSenseTime = 1.15; this.addText(text, W/2, TOP_H+102, suffix ? '#9edffb' : '#dffcff', suffix ? 14 : 16); }
+  private setSlashSense(info: GestureInfo, suffix = '') { const text = slashLabel(info) + suffix; this.state.slashSenseText = text; this.state.slashSenseTime = 1.15; if (suffix) this.showTransientText('instruction', text, '#9edffb'); }
   private healPlayer(amount:number) { const prev = this.state.hp; this.state.hp = clamp(this.state.hp + amount, 0, this.state.maxHp); if (this.state.hp > prev) this.addText('+' + Math.round(this.state.hp-prev), 92, 80, '#79ffbd', 18); }
   private damagePlayer(amount:number) { if (this.heroInvulnerable()) return; let remaining = amount; if (this.state.shield > 0) { const blocked = Math.min(this.state.shield, remaining); this.state.shield -= blocked; remaining -= blocked; if (blocked > 0) this.addText('SHIELD', 138, 98, '#92f6ff', 15); } if (remaining <= 0) return; this.state.hp -= remaining; this.state.flash = Math.max(this.state.flash, .24); this.state.shake = Math.max(this.state.shake, .28); this.addText('-' + Math.round(remaining), 92, 98, '#ff6e7f', 20); this.tones.tone(92,.15,'sawtooth',.06,-22); if (this.state.hp <= 0) { this.state.hp = 0; this.state.status = 'lose'; this.state.resultLine = '방어 코어 붕괴: 원거리 탄막에 전선이 무너졌습니다.'; } }
   private addXP(amount:number) { this.state.xp += amount; if (this.state.status === 'running' && this.state.xp >= this.state.xpNeed) { this.state.xp -= this.state.xpNeed; this.state.level += 1; this.state.xpNeed = Math.round(this.state.xpNeed * 1.32 + 4); this.enterChoice(); } }
@@ -206,25 +207,58 @@ export class GameScene extends Phaser.Scene {
   private updateEnemies(dt:number){ const alive=this.enemies.filter(e=>!e.dead); for(const e of alive){ e.hurt=Math.max(0,e.hurt-dt); e.hitFlash=Math.max(0,e.hitFlash-dt); e.attackCd-=dt; e.swing=Math.max(0,e.swing-dt); const tx=this.hero.skill?this.hero.x:this.hero.x-18, ty=this.hero.skill?this.hero.y:this.hero.y; const dx=tx-e.x,dy=ty-e.y,d=Math.hypot(dx,dy)||1; e.facing=dx>=0?1:-1; let sepX=0,sepY=0; for(const other of alive){ if(other===e) continue; const dd=dist(e.x,e.y,other.x,other.y), min=e.radius+other.radius+5; if(dd>0&&dd<min){ sepX+=(e.x-other.x)/dd*(min-dd)*1.5; sepY+=(e.y-other.y)/dd*(min-dd)*1.5; } } const orbitY=Math.sin((e.id*12+this.state.time*1.8))*10; if(e.isRanged){ const desired=e.preferredRange; let desiredX=sepX*1.2, desiredY=sepY*1.2+orbitY*.55; if(d>desired+18){ desiredX+=dx/d*e.speed; desiredY+=dy/d*e.speed; } else if(d<desired-18){ desiredX-=dx/d*e.speed*.95; desiredY-=dy/d*e.speed*.95; } else { desiredX+=-dy/d*e.speed*.55; desiredY+=dx/d*e.speed*.55; } e.vx=lerp(e.vx,desiredX,dt*5.5); e.vy=lerp(e.vy,desiredY,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; if(d<=e.range&&e.attackCd<=0){ e.attackCd=e.attackRate+rand(.25,.85); e.swing=.12; if(!this.heroInvulnerable()&&this.projectiles.length<10){ this.fireProjectile(e,tx,ty); this.tones.tone(210,.04,'square',.018,30); } else e.attackCd=Math.max(e.attackCd,.8); } } else { if(d>e.range+4){ e.vx=lerp(e.vx,dx/d*e.speed+sepX*1.6,dt*5.5); e.vy=lerp(e.vy,dy/d*e.speed+sepY*1.6+orbitY*.16,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; } else { e.vx=lerp(e.vx,sepX*1.25,dt*5.5); e.vy=lerp(e.vy,sepY*1.25+orbitY*.18,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; if(e.attackCd<=0){ e.attackCd=e.attackRate; e.swing=.18; if(!this.heroInvulnerable()){ this.createSlash(e.x+e.facing*14,e.y-6,e.facing>0?-.45:Math.PI+.45,e.type==='warden'?42:34,'#ffb17d',.18,5); this.damagePlayer(e.damage); } else { this.addParticle(e.x+e.facing*10,e.y-4,'#d8fbff',4,55,2.4,.18); e.attackCd*=.45; } } } } e.x=clamp(e.x,FIELD.x+4,FIELD.x+FIELD.w-4); e.y=clamp(e.y,FIELD.y+14,FIELD.y+FIELD.h-14); } this.enemies=this.enemies.filter(e=>!e.dead); this.state.battleAlive=this.enemies.length; if(this.state.status==='running'&&this.state.battleAlive===0&&this.state.battleClearTimer<0){ this.state.battleClearTimer=1; this.addText('CLEAR',W/2,146,'#96ffd1',26); this.tones.tone(690,.11,'triangle',.048,160); } }
   private fireProjectile(enemy: Enemy, tx:number, ty:number){ const dx=tx-enemy.x,dy=ty-enemy.y,d=Math.hypot(dx,dy)||1; this.projectiles.push({x:enemy.x+dx/d*12,y:enemy.y+dy/d*12,vx:dx/d*enemy.projectileSpeed,vy:dy/d*enemy.projectileSpeed,life:2.2,damage:enemy.damage,radius:enemy.projectileSize,color:enemy.projectileColor,trail:0}); }
   private updateProjectiles(dt:number){ for(const p of this.projectiles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.life-=dt; p.trail+=dt; if(p.trail>.035){ p.trail=0; this.particles.push({x:p.x,y:p.y,vx:0,vy:0,color:p.color,size:p.radius*.72,life:.18,maxLife:.18,drag:1}); } const hd=dist(p.x,p.y,this.hero.x,this.hero.y); if(this.heroInvulnerable()){ if(hd<18){ p.life=-1; this.addParticle(p.x,p.y,'#e7fdff',6,70,2.8,.22); } } else if(hd<p.radius+12){ this.damagePlayer(p.damage); this.addParticle(p.x,p.y,'#ffd5a8',8,90,2.8,.25); p.life=-1; } if(p.x<FIELD.x-30||p.x>FIELD.x+FIELD.w+30||p.y<FIELD.y-30||p.y>FIELD.y+FIELD.h+30) p.life=-1; } this.projectiles=this.projectiles.filter(p=>p.life>0); }
-  private processGesture(info: GestureInfo, hitChips: Chip[]){ const good: Chip[]=[]; const bad: Chip[]=[]; for(const c of hitChips){ c.marked=false; c.sliced=true; c.sliceAngle=Number.isFinite(c.hitAngle)?c.hitAngle:info.angle; c.pop=0; this.spawnChipShards(c); this.addParticle(c.x,c.y,c.kind==='glitch'?'#ff436a':'#dffcff',c.kind==='glitch'?16:12,150,3.8,.36); this.tones.tone(c.kind==='glitch'?120:760,.045,'triangle',c.kind==='glitch'?.045:.028,c.kind==='glitch'?-20:120); (c.kind==='glitch'?bad:good).push(c); } for(const c of bad){ this.damagePlayer(12); this.addParticle(c.x,c.y,'#ff406a',20,190,5,.6); this.addText('GLITCH',c.x,c.y-24,'#ff5b7a',17, DEPTH.GLITCH_WARNING); this.state.combo=0; this.state.comboTimer=0; } this.setSlashSense(info,''); if(good.length>0){ let mult=1+Math.min(.65,this.state.combo*(.022+this.state.upg.comboBonus))+Math.min(.25,(good.length-1)*.08); const repairCount=good.filter(c=>c.kind==='repair').length; const surgeCount=good.filter(c=>c.kind==='surge').length; if(repairCount) this.healPlayer(repairCount*5*this.state.upg.healBoost); if(surgeCount){ this.state.overdrive=clamp(this.state.overdrive+surgeCount*18,0,120); this.addText('SURGE',info.mx,info.my-24,'#f3d46b',16); } this.state.overdrive=clamp(this.state.overdrive+good.length*3,0,120); let overdrive=false; if(this.state.overdrive>=100){ this.state.overdrive-=100; mult*=1.75; overdrive=true; this.state.flash=Math.max(this.state.flash,.2); this.addText('OVERDRIVE',W/2,TOP_H+22,'#fff2a8',22); } this.state.combo+=good.length; this.state.maxCombo=Math.max(this.state.maxCombo,this.state.combo); this.state.comboTimer=3; this.state.score+=Math.round(16*good.length*(1+this.state.combo*.05)); this.addXP(.28*good.length); this.showCutFeedback(info, good.length, bad.length); this.triggerDirective(info,good.length,mult,overdrive); } this.rememberGesture(info); }
-
+  private processGesture(info: GestureInfo, hitChips: Chip[]){ const good: Chip[]=[]; const bad: Chip[]=[]; for(const c of hitChips){ c.marked=false; c.sliced=true; c.sliceAngle=Number.isFinite(c.hitAngle)?c.hitAngle:info.angle; c.pop=0; this.spawnChipShards(c); this.addParticle(c.x,c.y,c.kind==='glitch'?'#ff436a':'#dffcff',c.kind==='glitch'?16:12,150,3.8,.36); this.tones.tone(c.kind==='glitch'?120:760,.045,'triangle',c.kind==='glitch'?.045:.028,c.kind==='glitch'?-20:120); (c.kind==='glitch'?bad:good).push(c); } for(const c of bad){ this.damagePlayer(12); this.addParticle(c.x,c.y,'#ff406a',20,190,5,.6); this.showTransientText('glitch', 'GLITCH CORE', '#ff5b7a'); this.state.combo=0; this.state.comboTimer=0; } this.setSlashSense(info,''); if(good.length>0){ let mult=1+Math.min(.65,this.state.combo*(.022+this.state.upg.comboBonus))+Math.min(.25,(good.length-1)*.08); const repairCount=good.filter(c=>c.kind==='repair').length; const surgeCount=good.filter(c=>c.kind==='surge').length; if(repairCount) this.healPlayer(repairCount*5*this.state.upg.healBoost); if(surgeCount){ this.state.overdrive=clamp(this.state.overdrive+surgeCount*18,0,120); this.addText('SURGE',info.mx,info.my-24,'#f3d46b',16); } this.state.overdrive=clamp(this.state.overdrive+good.length*3,0,120); let overdrive=false; if(this.state.overdrive>=100){ this.state.overdrive-=100; mult*=1.75; overdrive=true; this.state.flash=Math.max(this.state.flash,.2); this.addText('OVERDRIVE',W/2,TOP_H+22,'#fff2a8',22); } this.state.combo+=good.length; this.state.maxCombo=Math.max(this.state.maxCombo,this.state.combo); this.state.comboTimer=3; this.state.score+=Math.round(16*good.length*(1+this.state.combo*.05)); this.addXP(.28*good.length); this.showCutFeedback(info, good.length, bad.length); this.triggerDirective(info,good.length,mult,overdrive); } this.rememberGesture(info); }
 
   private showCutFeedback(info: GestureInfo, goodCount: number, glitchCount: number) {
     const comboText = comboFeedbackText(this.state.combo, goodCount);
     const coreText = multiCoreFeedbackText(goodCount);
-    const baseY = TOP_H + 104 + (glitchCount > 0 ? 26 : 0);
+    if (glitchCount > 0) { this.showTransientText('glitch', 'GLITCH CORE', '#ff5b7a'); return; }
     if (comboText) {
       const color = this.state.combo >= 5 ? '#fff3a8' : '#dffcff';
-      this.addText(comboText, W / 2, baseY, color, this.state.combo >= 5 ? 24 : 20, DEPTH.FLOATING_TEXT);
+      this.showTransientText('combo', comboText, color);
     }
     if (coreText) {
-      this.addText(coreText, clamp(info.mx, 92, W - 92), Math.max(TOP_H + 126, info.my - 34), '#9ff6ff', 18, DEPTH.FLOATING_TEXT);
+      this.showTransientText('multiCore', coreText, '#9ff6ff');
       this.addParticle(info.mx, info.my, '#9ff6ff', 18 + goodCount * 3, 170, 3.2, 0.42);
     }
   }
 
+  private showTransientText(kind: 'combo' | 'multiCore' | 'instruction' | 'glitch', message: string, color: string) {
+    const lane = transientMessageLayout(TOP_H)[kind];
+    const depth = kind === 'glitch' ? DEPTH.GLITCH_WARNING : DEPTH.FLOATING_TEXT;
+    const duration = lane.duration;
+    let entry = this.transientLabels.get(kind);
+    if (!entry) {
+      const label = this.add.text(lane.x, lane.y, message, {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: `${lane.size}px`,
+        fontStyle: '900',
+        color,
+        align: 'center',
+        stroke: '#000000bb',
+        strokeThickness: kind === 'glitch' ? 4 : 3,
+      }).setOrigin(0.5, 0.5).setDepth(depth);
+      entry = { text: label, life: duration, maxLife: duration, y: lane.y, priority: lane.priority };
+      this.transientLabels.set(kind, entry);
+    }
+    entry.text.setText(message).setColor(color).setFontSize(lane.size).setPosition(lane.x, lane.y).setDepth(depth).setAlpha(1).setScale(1);
+    entry.life = duration;
+    entry.maxLife = duration;
+    entry.y = lane.y;
+    entry.priority = lane.priority;
+  }
+
+  private hasActiveTransientText(...kinds: Array<'combo' | 'multiCore' | 'instruction' | 'glitch'>) {
+    return kinds.some((kind) => (this.transientLabels.get(kind)?.life ?? 0) > 0);
+  }
+
+  private clearTransientLabels() {
+    this.transientLabels.forEach(({ text }) => text.destroy());
+    this.transientLabels.clear();
+  }
+
   private updateRun(dt:number){ this.state.time+=dt; if(this.state.comboTimer>0){ this.state.comboTimer-=dt; if(this.state.comboTimer<=0) this.state.combo=0; } this.state.battleBanner=Math.max(0,this.state.battleBanner-dt); this.state.chipSpawn-=dt; const chipInterval=clamp(.64-this.state.time*.002,.34,.64); if(this.state.chipSpawn<=0){ this.spawnChip(false); this.state.chipSpawn=chipInterval; } for(const c of this.chips){ c.age+=dt; if(!c.sliced){ c.x+=c.vx*dt; c.y+=c.vy*dt; c.vy+=c.g*dt; c.rot+=c.spin*dt; if(c.x<42||c.x>W-42) c.vx*=-.88; c.x=clamp(c.x,42,W-42); } else c.pop+=dt*6; if(c.markedPulse>0) c.markedPulse=Math.max(0,c.markedPulse-dt*4.5); if(c.y>H+60||c.pop>1) c.remove=true; } this.chips=this.chips.filter(c=>!c.remove); if(this.pointerState.down){ this.evaluatePointerGesture(); this.commitPointerGesture(false); } this.updateHeroSkill(dt); this.heroAutoAttack(dt); for(const t of this.hero.trail) t.life-=dt; this.hero.trail=this.hero.trail.filter(t=>t.life>0); this.updateEnemies(dt); this.updateProjectiles(dt); if(this.state.battleClearTimer>=0){ this.state.battleClearTimer-=dt; if(this.state.battleClearTimer<=0&&this.state.status==='running') this.beginNextBattle(); } if(this.state.time>=this.state.runTime&&this.state.status==='running'){ this.state.status='win'; this.state.resultLine=`전투 ${this.state.battleIndex}개 구역을 돌파하고 ${this.state.kills}명을 처치했습니다.`; this.tones.tone(640,.12,'triangle',.06,180); } }
-  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const death of this.deathSprites){ death.life-=dt; const a=clamp(death.life/death.maxLife,0,1); death.sprite.setAlpha(a*.72).setY(death.sprite.y-dt*10).setScale(death.sprite.scaleX*.985, death.sprite.scaleY*.985); } this.deathSprites=this.deathSprites.filter(death=>{ if(death.life>0) return true; death.sprite.destroy(); return false; }); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; { const ratio=clamp(f.life/f.maxLife,0,1); item.text.setPosition(f.x,f.y).setAlpha(ratio).setScale(1 + (1 - ratio) * .16); } } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
+  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const death of this.deathSprites){ death.life-=dt; const a=clamp(death.life/death.maxLife,0,1); death.sprite.setAlpha(a*.72).setY(death.sprite.y-dt*10).setScale(death.sprite.scaleX*.985, death.sprite.scaleY*.985); } this.deathSprites=this.deathSprites.filter(death=>{ if(death.life>0) return true; death.sprite.destroy(); return false; }); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; { const ratio=clamp(f.life/f.maxLife,0,1); item.text.setPosition(f.x,f.y).setAlpha(ratio).setScale(1 + (1 - ratio) * .16); } } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); for (const [kind, item] of this.transientLabels) { item.life -= dt; const ratio = clamp(item.life / item.maxLife, 0, 1); item.text.setAlpha(ratio).setY(item.y - (1 - ratio) * 8); if (item.life <= 0) { item.text.destroy(); this.transientLabels.delete(kind); } } this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
 
   private renderFrame(){ const g=this.g, fx=this.fx, hudG=this.hudG, pointerG=this.pointerG, overlayG=this.overlayG; g.clear(); fx.clear(); hudG.clear(); pointerG.clear(); overlayG.clear(); this.drawTop(g); this.drawBottom(g); this.syncCharacterSprites(); this.drawCharacterForeground(fx); this.drawParticles(fx); this.drawPointerTrail(pointerG); this.drawHudBars(hudG); this.drawOverlay(overlayG); this.updateHudTexts(); }
 
@@ -335,6 +369,7 @@ export class GameScene extends Phaser.Scene {
     this.enemySprites.clear();
     this.deathSprites.forEach(({ sprite }) => sprite.destroy());
     this.deathSprites = [];
+    this.clearTransientLabels();
   }
   private drawTop(g: Phaser.GameObjects.Graphics){
     g.fillGradientStyle(0x202838, 0x202838, 0x0d121b, 0x0d121b, 1, 1, 1, 1).fillRect(0,0,W,TOP_H);
@@ -399,7 +434,6 @@ export class GameScene extends Phaser.Scene {
     for(const c of this.chips) this.drawChip(g,c);
     for(const shard of this.chipShards) this.drawChipShard(g, shard);
   }
-
 
   private spawnChipShards(chip: Chip) {
     const shards = createChipShards(chip, chip.sliceAngle);
@@ -569,5 +603,5 @@ export class GameScene extends Phaser.Scene {
     this.overlayText(W/2,374,'터치 / Space / R 로 다시 플레이',15,'rgba(232,251,255,.86)','800');
   }
 
-  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText('좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText('가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0 && this.state.status==='running'){ this.overlayText(W/2,battleBannerLayout(this.state.battleBanner, this.state.time, W).textY,this.state.battleBannerText,21,'#fff3a8'); } }
+  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); const transientActive=this.hasActiveTransientText('combo','multiCore','instruction','glitch'); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText&&!transientActive?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText(transientActive?'':'좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText(transientActive?'':'가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0 && this.state.status==='running'){ this.overlayText(W/2,battleBannerLayout(this.state.battleBanner, this.state.time, W).textY,this.state.battleBannerText,21,'#fff3a8'); } }
 }
