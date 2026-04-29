@@ -8,6 +8,7 @@ This port recreates `splitblade_mvp_v13.html` as a client-only Phaser 3 game mou
 - `src/components/SplitBladeGame.tsx` is a client component that dynamically imports the Phaser bootstrap in `useEffect`, so Phaser is never evaluated during SSR/prerendering.
 - `src/game/SplitBladeGame.ts` creates a 540x960 Phaser game with `FIT` scaling.
 - `src/game/GameScene.ts` ports the source MVP's runtime state, wave spawning, enemy AI, chip field, gesture processing, upgrades, HUD, effects, and WebAudio tones.
+- `src/game/characterSprites.ts` generates original pixel-art character spritesheets at runtime and registers Phaser animations for the hero plus scout/gunner/raider/brute/warden enemies.
 - `src/game/gesture.ts` contains test-covered gesture recognition shared by the scene.
 
 ## Gameplay parity targets
@@ -16,8 +17,10 @@ The port keeps the original virtual coordinate system and core numeric tuning: 1
 
 ## Known parity limits
 
-The original used direct Canvas 2D drawing with gradients, pixel-art sprite routines, and canvas text. This Phaser port uses immediate-mode `Graphics` plus Phaser text objects, so some sprite silhouettes, gradients, and glow/shadow effects are approximations. Gameplay rules and coordinates are prioritized over exact draw-call parity.
+The original used direct Canvas 2D drawing with gradients and canvas text. This Phaser port keeps immediate-mode `Graphics` for arenas, UI, projectiles, slash trails, chip shards, and overlays, while character bodies are generated Phaser Sprite/Image objects using original in-code pixel-art spritesheets. Gameplay rules and coordinates are prioritized over exact draw-call parity.
 
 ## Visual polish pass
 
 The second pass adds production-style neon panel treatment for the start, upgrade, battle, HUD, and result surfaces. Chip slicing now creates physical shard halves that split along the actual recognized slash angle, fly apart, rotate, fall, fade, and retain chip role colors.
+
+The character sprite pass adds generated hero idle/run/slash/hit animations, enemy idle/move/attack/hit/death variants, dash afterimages, hit flashes, and short dissolve sprites for defeated enemies without importing external copyrighted assets.
