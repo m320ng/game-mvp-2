@@ -1,0 +1,9 @@
+export const W = 540;
+export const H = 960;
+export const TOP_H = 500;
+export const BOT_H = H - TOP_H;
+export const FIELD = { x: 30, y: 68, w: 480, h: 426 } as const;
+export const CORE_X = 42;
+export const HERO_HOME_X = 130;
+export const HERO_HOME_Y = 250;
+export const TAU = Math.PI * 2;
