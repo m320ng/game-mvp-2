@@ -1,8 +1,9 @@
 import * as Phaser from 'phaser';
-import { BOT_H, CORE_X, FIELD, H, HERO_HOME_X, HERO_HOME_Y, TAU, TOP_H, W } from './constants';
+import { BOT_H, CORE_X, DEPTH, FIELD, H, HERO_HOME_X, HERO_HOME_Y, TAU, TOP_H, W } from './constants';
 import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
+import { comboFeedbackText, multiCoreFeedbackText } from './feedback';
 import { chipPalette, createChipShards } from './chipShards';
 import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
@@ -18,6 +19,9 @@ const ENEMY_STATS: Record<EnemyType, { hp:number; speed:number; cooldown:number;
 export class GameScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
   private fx!: Phaser.GameObjects.Graphics;
+  private hudG!: Phaser.GameObjects.Graphics;
+  private overlayG!: Phaser.GameObjects.Graphics;
+  private pointerG!: Phaser.GameObjects.Graphics;
   private ui!: Phaser.GameObjects.Container;
   private overlay!: Phaser.GameObjects.Container;
   private state!: GameState;
@@ -44,10 +48,13 @@ export class GameScene extends Phaser.Scene {
 
   create() {
     registerGeneratedCharacterSprites(this);
-    this.g = this.add.graphics().setDepth(0);
-    this.fx = this.add.graphics().setDepth(5);
-    this.ui = this.add.container(0, 0);
-    this.overlay = this.add.container(0, 0);
+    this.g = this.add.graphics().setDepth(DEPTH.BACKGROUND);
+    this.fx = this.add.graphics().setDepth(DEPTH.EFFECTS);
+    this.hudG = this.add.graphics().setDepth(DEPTH.HUD);
+    this.pointerG = this.add.graphics().setDepth(DEPTH.POINTER);
+    this.overlayG = this.add.graphics().setDepth(DEPTH.OVERLAY);
+    this.ui = this.add.container(0, 0).setDepth(DEPTH.HUD);
+    this.overlay = this.add.container(0, 0).setDepth(DEPTH.OVERLAY_TEXT);
     this.createHudTexts();
     this.resetState();
     this.input.on('pointerdown', this.handlePointerDown, this);
@@ -72,7 +79,7 @@ export class GameScene extends Phaser.Scene {
 
   private createHudTexts() {
     const make = (x:number, y:number, size:number, color = '#eaffff', align: 'left'|'center'|'right' = 'left') => {
-      const t = this.add.text(x, y, '', { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color }).setOrigin(align === 'center' ? 0.5 : align === 'right' ? 1 : 0, 0.5).setDepth(10);
+      const t = this.add.text(x, y, '', { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color }).setOrigin(align === 'center' ? 0.5 : align === 'right' ? 1 : 0, 0.5);
       this.ui.add(t); return t;
     };
     this.hud.timer = make(W/2, 26, 20, '#e8fbff', 'center');
@@ -169,7 +176,7 @@ export class GameScene extends Phaser.Scene {
 
   private spawnChip(initial = false) { const r = Math.random(); let kind: Chip['kind'] = 'blade'; if (r < 0.10 && !initial) kind = 'glitch'; else if (r < 0.25) kind = 'repair'; else if (r < 0.43) kind = 'surge'; this.chips.push({ id: this.nextId++, kind, x: rand(60, W-60), y: initial ? rand(TOP_H+84, H-58) : H+rand(18,46), vx: rand(-62,62), vy: initial ? rand(-80,70) : rand(-800,-620), g: rand(760,920), r: kind === 'glitch' ? rand(23,27) : rand(25,32), rot: rand(0,TAU), spin: rand(-2.6,2.6), age: 0, marked: false, markedPulse: 0, hitAngle: 0, sliceAngle: 0, sliced: false, pop: 0, remove: false }); }
   private addParticle(x:number,y:number,color:string,count=8,speed=120,size=3,life=0.55) { for (let i=0;i<count;i++){ const a=rand(0,TAU); const s=rand(speed*.25,speed); this.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,color,size:rand(size*.5,size),life:rand(life*.55,life),maxLife:life,drag:.9}); } }
-  private addText(text:string,x:number,y:number,color='#eaffff',size=18) { const model: FloatText = { text, x, y, vy: -42, life: .82, maxLife: .82, color, size }; const label = this.add.text(x, y, text, { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color, stroke: '#00000099', strokeThickness: 3 }).setOrigin(.5).setDepth(30); this.floatLabels.push({ model, text: label }); }
+  private addText(text:string,x:number,y:number,color='#eaffff',size=18, depth: number=DEPTH.FLOATING_TEXT) { const model: FloatText = { text, x, y, vy: -42, life: .82, maxLife: .82, color, size }; const label = this.add.text(x, y, text, { fontFamily: 'system-ui, sans-serif', fontSize: `${size}px`, fontStyle: '900', color, stroke: '#00000099', strokeThickness: 3 }).setOrigin(.5).setDepth(depth); this.floatLabels.push({ model, text: label }); }
   private setSlashSense(info: GestureInfo, suffix = '') { const text = slashLabel(info) + suffix; this.state.slashSenseText = text; this.state.slashSenseTime = 1.15; this.addText(text, W/2, TOP_H+102, suffix ? '#9edffb' : '#dffcff', suffix ? 14 : 16); }
   private healPlayer(amount:number) { const prev = this.state.hp; this.state.hp = clamp(this.state.hp + amount, 0, this.state.maxHp); if (this.state.hp > prev) this.addText('+' + Math.round(this.state.hp-prev), 92, 80, '#79ffbd', 18); }
   private damagePlayer(amount:number) { if (this.heroInvulnerable()) return; let remaining = amount; if (this.state.shield > 0) { const blocked = Math.min(this.state.shield, remaining); this.state.shield -= blocked; remaining -= blocked; if (blocked > 0) this.addText('SHIELD', 138, 98, '#92f6ff', 15); } if (remaining <= 0) return; this.state.hp -= remaining; this.state.flash = Math.max(this.state.flash, .24); this.state.shake = Math.max(this.state.shake, .28); this.addText('-' + Math.round(remaining), 92, 98, '#ff6e7f', 20); this.tones.tone(92,.15,'sawtooth',.06,-22); if (this.state.hp <= 0) { this.state.hp = 0; this.state.status = 'lose'; this.state.resultLine = '방어 코어 붕괴: 원거리 탄막에 전선이 무너졌습니다.'; } }
@@ -199,12 +206,29 @@ export class GameScene extends Phaser.Scene {
   private updateEnemies(dt:number){ const alive=this.enemies.filter(e=>!e.dead); for(const e of alive){ e.hurt=Math.max(0,e.hurt-dt); e.hitFlash=Math.max(0,e.hitFlash-dt); e.attackCd-=dt; e.swing=Math.max(0,e.swing-dt); const tx=this.hero.skill?this.hero.x:this.hero.x-18, ty=this.hero.skill?this.hero.y:this.hero.y; const dx=tx-e.x,dy=ty-e.y,d=Math.hypot(dx,dy)||1; e.facing=dx>=0?1:-1; let sepX=0,sepY=0; for(const other of alive){ if(other===e) continue; const dd=dist(e.x,e.y,other.x,other.y), min=e.radius+other.radius+5; if(dd>0&&dd<min){ sepX+=(e.x-other.x)/dd*(min-dd)*1.5; sepY+=(e.y-other.y)/dd*(min-dd)*1.5; } } const orbitY=Math.sin((e.id*12+this.state.time*1.8))*10; if(e.isRanged){ const desired=e.preferredRange; let desiredX=sepX*1.2, desiredY=sepY*1.2+orbitY*.55; if(d>desired+18){ desiredX+=dx/d*e.speed; desiredY+=dy/d*e.speed; } else if(d<desired-18){ desiredX-=dx/d*e.speed*.95; desiredY-=dy/d*e.speed*.95; } else { desiredX+=-dy/d*e.speed*.55; desiredY+=dx/d*e.speed*.55; } e.vx=lerp(e.vx,desiredX,dt*5.5); e.vy=lerp(e.vy,desiredY,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; if(d<=e.range&&e.attackCd<=0){ e.attackCd=e.attackRate+rand(.25,.85); e.swing=.12; if(!this.heroInvulnerable()&&this.projectiles.length<10){ this.fireProjectile(e,tx,ty); this.tones.tone(210,.04,'square',.018,30); } else e.attackCd=Math.max(e.attackCd,.8); } } else { if(d>e.range+4){ e.vx=lerp(e.vx,dx/d*e.speed+sepX*1.6,dt*5.5); e.vy=lerp(e.vy,dy/d*e.speed+sepY*1.6+orbitY*.16,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; } else { e.vx=lerp(e.vx,sepX*1.25,dt*5.5); e.vy=lerp(e.vy,sepY*1.25+orbitY*.18,dt*5.5); e.x+=e.vx*dt; e.y+=e.vy*dt; if(e.attackCd<=0){ e.attackCd=e.attackRate; e.swing=.18; if(!this.heroInvulnerable()){ this.createSlash(e.x+e.facing*14,e.y-6,e.facing>0?-.45:Math.PI+.45,e.type==='warden'?42:34,'#ffb17d',.18,5); this.damagePlayer(e.damage); } else { this.addParticle(e.x+e.facing*10,e.y-4,'#d8fbff',4,55,2.4,.18); e.attackCd*=.45; } } } } e.x=clamp(e.x,FIELD.x+4,FIELD.x+FIELD.w-4); e.y=clamp(e.y,FIELD.y+14,FIELD.y+FIELD.h-14); } this.enemies=this.enemies.filter(e=>!e.dead); this.state.battleAlive=this.enemies.length; if(this.state.status==='running'&&this.state.battleAlive===0&&this.state.battleClearTimer<0){ this.state.battleClearTimer=1; this.addText('CLEAR',W/2,146,'#96ffd1',26); this.tones.tone(690,.11,'triangle',.048,160); } }
   private fireProjectile(enemy: Enemy, tx:number, ty:number){ const dx=tx-enemy.x,dy=ty-enemy.y,d=Math.hypot(dx,dy)||1; this.projectiles.push({x:enemy.x+dx/d*12,y:enemy.y+dy/d*12,vx:dx/d*enemy.projectileSpeed,vy:dy/d*enemy.projectileSpeed,life:2.2,damage:enemy.damage,radius:enemy.projectileSize,color:enemy.projectileColor,trail:0}); }
   private updateProjectiles(dt:number){ for(const p of this.projectiles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.life-=dt; p.trail+=dt; if(p.trail>.035){ p.trail=0; this.particles.push({x:p.x,y:p.y,vx:0,vy:0,color:p.color,size:p.radius*.72,life:.18,maxLife:.18,drag:1}); } const hd=dist(p.x,p.y,this.hero.x,this.hero.y); if(this.heroInvulnerable()){ if(hd<18){ p.life=-1; this.addParticle(p.x,p.y,'#e7fdff',6,70,2.8,.22); } } else if(hd<p.radius+12){ this.damagePlayer(p.damage); this.addParticle(p.x,p.y,'#ffd5a8',8,90,2.8,.25); p.life=-1; } if(p.x<FIELD.x-30||p.x>FIELD.x+FIELD.w+30||p.y<FIELD.y-30||p.y>FIELD.y+FIELD.h+30) p.life=-1; } this.projectiles=this.projectiles.filter(p=>p.life>0); }
-  private processGesture(info: GestureInfo, hitChips: Chip[]){ const good: Chip[]=[]; const bad: Chip[]=[]; for(const c of hitChips){ c.marked=false; c.sliced=true; c.sliceAngle=Number.isFinite(c.hitAngle)?c.hitAngle:info.angle; c.pop=0; this.spawnChipShards(c); this.addParticle(c.x,c.y,c.kind==='glitch'?'#ff436a':'#dffcff',c.kind==='glitch'?16:12,150,3.8,.36); this.tones.tone(c.kind==='glitch'?120:760,.045,'triangle',c.kind==='glitch'?.045:.028,c.kind==='glitch'?-20:120); (c.kind==='glitch'?bad:good).push(c); } for(const c of bad){ this.damagePlayer(12); this.addParticle(c.x,c.y,'#ff406a',20,190,5,.6); this.addText('GLITCH',c.x,c.y-24,'#ff5b7a',17); this.state.combo=0; this.state.comboTimer=0; } this.setSlashSense(info,''); if(good.length>0){ let mult=1+Math.min(.65,this.state.combo*(.022+this.state.upg.comboBonus))+Math.min(.25,(good.length-1)*.08); const repairCount=good.filter(c=>c.kind==='repair').length; const surgeCount=good.filter(c=>c.kind==='surge').length; if(repairCount) this.healPlayer(repairCount*5*this.state.upg.healBoost); if(surgeCount){ this.state.overdrive=clamp(this.state.overdrive+surgeCount*18,0,120); this.addText('SURGE',info.mx,info.my-24,'#f3d46b',16); } this.state.overdrive=clamp(this.state.overdrive+good.length*3,0,120); let overdrive=false; if(this.state.overdrive>=100){ this.state.overdrive-=100; mult*=1.75; overdrive=true; this.state.flash=Math.max(this.state.flash,.2); this.addText('OVERDRIVE',W/2,TOP_H+22,'#fff2a8',22); } this.state.combo+=good.length; this.state.maxCombo=Math.max(this.state.maxCombo,this.state.combo); this.state.comboTimer=3; this.state.score+=Math.round(16*good.length*(1+this.state.combo*.05)); this.addXP(.28*good.length); this.triggerDirective(info,good.length,mult,overdrive); } this.rememberGesture(info); }
+  private processGesture(info: GestureInfo, hitChips: Chip[]){ const good: Chip[]=[]; const bad: Chip[]=[]; for(const c of hitChips){ c.marked=false; c.sliced=true; c.sliceAngle=Number.isFinite(c.hitAngle)?c.hitAngle:info.angle; c.pop=0; this.spawnChipShards(c); this.addParticle(c.x,c.y,c.kind==='glitch'?'#ff436a':'#dffcff',c.kind==='glitch'?16:12,150,3.8,.36); this.tones.tone(c.kind==='glitch'?120:760,.045,'triangle',c.kind==='glitch'?.045:.028,c.kind==='glitch'?-20:120); (c.kind==='glitch'?bad:good).push(c); } for(const c of bad){ this.damagePlayer(12); this.addParticle(c.x,c.y,'#ff406a',20,190,5,.6); this.addText('GLITCH',c.x,c.y-24,'#ff5b7a',17, DEPTH.GLITCH_WARNING); this.state.combo=0; this.state.comboTimer=0; } this.setSlashSense(info,''); if(good.length>0){ let mult=1+Math.min(.65,this.state.combo*(.022+this.state.upg.comboBonus))+Math.min(.25,(good.length-1)*.08); const repairCount=good.filter(c=>c.kind==='repair').length; const surgeCount=good.filter(c=>c.kind==='surge').length; if(repairCount) this.healPlayer(repairCount*5*this.state.upg.healBoost); if(surgeCount){ this.state.overdrive=clamp(this.state.overdrive+surgeCount*18,0,120); this.addText('SURGE',info.mx,info.my-24,'#f3d46b',16); } this.state.overdrive=clamp(this.state.overdrive+good.length*3,0,120); let overdrive=false; if(this.state.overdrive>=100){ this.state.overdrive-=100; mult*=1.75; overdrive=true; this.state.flash=Math.max(this.state.flash,.2); this.addText('OVERDRIVE',W/2,TOP_H+22,'#fff2a8',22); } this.state.combo+=good.length; this.state.maxCombo=Math.max(this.state.maxCombo,this.state.combo); this.state.comboTimer=3; this.state.score+=Math.round(16*good.length*(1+this.state.combo*.05)); this.addXP(.28*good.length); this.showCutFeedback(info, good.length, bad.length); this.triggerDirective(info,good.length,mult,overdrive); } this.rememberGesture(info); }
+
+
+  private showCutFeedback(info: GestureInfo, goodCount: number, glitchCount: number) {
+    const comboText = comboFeedbackText(this.state.combo, goodCount);
+    const coreText = multiCoreFeedbackText(goodCount);
+    const baseY = TOP_H + 104 + (glitchCount > 0 ? 26 : 0);
+    if (comboText) {
+      const color = this.state.combo >= 5 ? '#fff3a8' : '#dffcff';
+      this.addText(comboText, W / 2, baseY, color, this.state.combo >= 5 ? 24 : 20, DEPTH.FLOATING_TEXT);
+    }
+    if (coreText) {
+      this.addText(coreText, clamp(info.mx, 92, W - 92), Math.max(TOP_H + 126, info.my - 34), '#9ff6ff', 18, DEPTH.FLOATING_TEXT);
+      this.addParticle(info.mx, info.my, '#9ff6ff', 18 + goodCount * 3, 170, 3.2, 0.42);
+    }
+  }
 
   private updateRun(dt:number){ this.state.time+=dt; if(this.state.comboTimer>0){ this.state.comboTimer-=dt; if(this.state.comboTimer<=0) this.state.combo=0; } this.state.battleBanner=Math.max(0,this.state.battleBanner-dt); this.state.chipSpawn-=dt; const chipInterval=clamp(.64-this.state.time*.002,.34,.64); if(this.state.chipSpawn<=0){ this.spawnChip(false); this.state.chipSpawn=chipInterval; } for(const c of this.chips){ c.age+=dt; if(!c.sliced){ c.x+=c.vx*dt; c.y+=c.vy*dt; c.vy+=c.g*dt; c.rot+=c.spin*dt; if(c.x<42||c.x>W-42) c.vx*=-.88; c.x=clamp(c.x,42,W-42); } else c.pop+=dt*6; if(c.markedPulse>0) c.markedPulse=Math.max(0,c.markedPulse-dt*4.5); if(c.y>H+60||c.pop>1) c.remove=true; } this.chips=this.chips.filter(c=>!c.remove); if(this.pointerState.down){ this.evaluatePointerGesture(); this.commitPointerGesture(false); } this.updateHeroSkill(dt); this.heroAutoAttack(dt); for(const t of this.hero.trail) t.life-=dt; this.hero.trail=this.hero.trail.filter(t=>t.life>0); this.updateEnemies(dt); this.updateProjectiles(dt); if(this.state.battleClearTimer>=0){ this.state.battleClearTimer-=dt; if(this.state.battleClearTimer<=0&&this.state.status==='running') this.beginNextBattle(); } if(this.state.time>=this.state.runTime&&this.state.status==='running'){ this.state.status='win'; this.state.resultLine=`전투 ${this.state.battleIndex}개 구역을 돌파하고 ${this.state.kills}명을 처치했습니다.`; this.tones.tone(640,.12,'triangle',.06,180); } }
-  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const death of this.deathSprites){ death.life-=dt; const a=clamp(death.life/death.maxLife,0,1); death.sprite.setAlpha(a*.72).setY(death.sprite.y-dt*10).setScale(death.sprite.scaleX*.985, death.sprite.scaleY*.985); } this.deathSprites=this.deathSprites.filter(death=>{ if(death.life>0) return true; death.sprite.destroy(); return false; }); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; item.text.setPosition(f.x,f.y).setAlpha(clamp(f.life/f.maxLife,0,1)); } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
+  private updateEffects(dt:number){ for(const shard of this.chipShards){ shard.age+=dt; shard.life-=dt; shard.x+=shard.vx*dt; shard.y+=shard.vy*dt; shard.vy+=shard.g*dt; shard.rot+=shard.spin*dt; shard.vx*=Math.pow(.985,dt*60); } this.chipShards=this.chipShards.filter(shard=>shard.life>0); for(const s of this.slashes) s.t+=dt; this.slashes=this.slashes.filter(s=>s.t<s.dur); for(const p of this.particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.life-=dt; } this.particles=this.particles.filter(p=>p.life>0); for(const death of this.deathSprites){ death.life-=dt; const a=clamp(death.life/death.maxLife,0,1); death.sprite.setAlpha(a*.72).setY(death.sprite.y-dt*10).setScale(death.sprite.scaleX*.985, death.sprite.scaleY*.985); } this.deathSprites=this.deathSprites.filter(death=>{ if(death.life>0) return true; death.sprite.destroy(); return false; }); for(const item of this.floatLabels){ const f=item.model; f.y+=f.vy*dt; f.life-=dt; { const ratio=clamp(f.life/f.maxLife,0,1); item.text.setPosition(f.x,f.y).setAlpha(ratio).setScale(1 + (1 - ratio) * .16); } } this.floatLabels=this.floatLabels.filter(item=>{ if(item.model.life>0) return true; item.text.destroy(); return false; }); this.state.slashSenseTime=Math.max(0,this.state.slashSenseTime-dt); this.state.shake=Math.max(0,this.state.shake-dt*1.7); this.state.flash=Math.max(0,this.state.flash-dt*1.9); }
 
-  private renderFrame(){ const g=this.g, fx=this.fx; g.clear(); fx.clear(); this.drawTop(g); this.drawBottom(g); this.syncCharacterSprites(); this.drawCharacterForeground(fx); this.drawParticles(fx); this.drawOverlay(g); this.updateHudTexts(); }
+  private renderFrame(){ const g=this.g, fx=this.fx, hudG=this.hudG, pointerG=this.pointerG, overlayG=this.overlayG; g.clear(); fx.clear(); hudG.clear(); pointerG.clear(); overlayG.clear(); this.drawTop(g); this.drawBottom(g); this.syncCharacterSprites(); this.drawCharacterForeground(fx); this.drawParticles(fx); this.drawPointerTrail(pointerG); this.drawHudBars(hudG); this.drawOverlay(overlayG); this.updateHudTexts(); }
+
+  private characterDepth(y: number) { return DEPTH.CHARACTER_BASE + (y / H) * DEPTH.CHARACTER_Y_SORT_RANGE; }
 
   private syncCharacterSprites() {
     const visible = this.state.status === 'running';
@@ -215,7 +239,7 @@ export class GameScene extends Phaser.Scene {
 
   private syncHeroSprite(visible: boolean) {
     if (!this.heroSprite) {
-      this.heroSprite = this.add.sprite(this.hero.x, this.hero.y, characterTextureKey('hero'), 0).setOrigin(0.5, 0.78).setDepth(3.2);
+      this.heroSprite = this.add.sprite(this.hero.x, this.hero.y, characterTextureKey('hero'), 0).setOrigin(0.5, 0.78).setDepth(DEPTH.CHARACTER_BASE);
       this.heroSprite.setScale(CHARACTER_SPRITE_SPECS.hero.scale);
     }
     this.heroSprite.setVisible(visible);
@@ -225,7 +249,7 @@ export class GameScene extends Phaser.Scene {
     this.heroSprite
       .setPosition(this.hero.x, this.hero.y)
       .setFlipX(this.hero.facing < 0)
-      .setDepth(3 + this.hero.y / 1000)
+      .setDepth(this.characterDepth(this.hero.y))
       .setAlpha(1)
       .setTint(this.hero.hitFlash > 0 ? 0xffffff : 0xffffff);
   }
@@ -237,7 +261,7 @@ export class GameScene extends Phaser.Scene {
 
   private syncHeroAfterimages(visible: boolean) {
     while (this.heroTrailSprites.length < this.hero.trail.length) {
-      this.heroTrailSprites.push(this.add.image(0, 0, characterTextureKey('hero'), 8).setOrigin(0.5, 0.78).setDepth(2.8).setScale(CHARACTER_SPRITE_SPECS.hero.scale).setTint(0x9ff6ff));
+      this.heroTrailSprites.push(this.add.image(0, 0, characterTextureKey('hero'), 8).setOrigin(0.5, 0.78).setDepth(DEPTH.CHARACTER_TRAIL).setScale(CHARACTER_SPRITE_SPECS.hero.scale).setTint(0x9ff6ff));
     }
     while (this.heroTrailSprites.length > this.hero.trail.length) this.heroTrailSprites.pop()?.destroy();
     for (let i = 0; i < this.heroTrailSprites.length; i++) {
@@ -245,7 +269,7 @@ export class GameScene extends Phaser.Scene {
       const sprite = this.heroTrailSprites[i];
       sprite.setVisible(visible && !!trail);
       if (!visible || !trail) continue;
-      sprite.setPosition(trail.x, trail.y).setFlipX(this.hero.facing < 0).setAlpha(clamp(trail.life / .18, 0, 1) * .35).setDepth(2.6 + trail.y / 1000);
+      sprite.setPosition(trail.x, trail.y).setFlipX(this.hero.facing < 0).setAlpha(clamp(trail.life / .18, 0, 1) * .35).setDepth(DEPTH.CHARACTER_TRAIL + (trail.y / H) * DEPTH.CHARACTER_Y_SORT_RANGE);
     }
   }
 
@@ -256,7 +280,7 @@ export class GameScene extends Phaser.Scene {
       aliveIds.add(enemy.id);
       let sprite = this.enemySprites.get(enemy.id);
       if (!sprite) {
-        sprite = this.add.sprite(enemy.x, enemy.y, characterTextureKey(enemy.type), 0).setOrigin(0.5, 0.78).setDepth(3);
+        sprite = this.add.sprite(enemy.x, enemy.y, characterTextureKey(enemy.type), 0).setOrigin(0.5, 0.78).setDepth(DEPTH.CHARACTER_BASE);
         sprite.setScale(CHARACTER_SPRITE_SPECS[enemy.type].scale);
         this.enemySprites.set(enemy.id, sprite);
       }
@@ -268,7 +292,7 @@ export class GameScene extends Phaser.Scene {
       sprite
         .setPosition(enemy.x, enemy.y)
         .setFlipX(enemy.facing < 0)
-        .setDepth(3 + enemy.y / 1000)
+        .setDepth(this.characterDepth(enemy.y))
         .setTint(enemy.hitFlash > 0 ? 0xffffff : 0xffffff)
         .setAlpha(1);
     }
@@ -290,7 +314,7 @@ export class GameScene extends Phaser.Scene {
     const livingSprite = this.enemySprites.get(enemy.id);
     const sprite = this.add.sprite(enemy.x, enemy.y, characterTextureKey(enemy.type), 12)
       .setOrigin(0.5, 0.78)
-      .setDepth(2.9 + enemy.y / 1000)
+      .setDepth(DEPTH.CHARACTER_BASE - 2 + (enemy.y / H) * DEPTH.CHARACTER_Y_SORT_RANGE)
       .setScale(CHARACTER_SPRITE_SPECS[enemy.type].scale)
       .setFlipX(enemy.facing < 0)
       .setTint(enemy.type === 'warden' ? 0xffd17c : 0xffb17d);
@@ -318,19 +342,13 @@ export class GameScene extends Phaser.Scene {
     this.drawField(g);
     this.drawCore(g);
     this.drawProjectiles(g);
-    if(this.state.battleBanner>0){
-      const a=Math.min(1,this.state.battleBanner*1.25);
-      g.fillStyle(0x06111c,.68*a).fillRoundedRect(W/2-144,88,288,54,18);
-      g.lineStyle(2,0xfff3a8,.72*a).strokeRoundedRect(W/2-144,88,288,54,18);
-      g.lineStyle(1,0x7ff0ff,.38*a).strokeRoundedRect(W/2-136,96,272,38,13);
-    }
     g.lineStyle(3,0x8ef2ff,.36).lineBetween(0,TOP_H-.5,W,TOP_H-.5);
     if(this.state.flash>0) g.fillStyle(0xfff4d6,this.state.flash*.35).fillRect(0,0,W,H);
   }
 
   private drawField(g: Phaser.GameObjects.Graphics){ g.fillStyle(0x151b24).fillRoundedRect(FIELD.x,FIELD.y,FIELD.w,FIELD.h,22); g.fillStyle(0xffffff,.025); for(let i=0;i<150;i++) g.fillRect(FIELD.x+(i*73)%FIELD.w, FIELD.y+((i*47)%FIELD.h),4,4); g.lineStyle(1,0x6e8caa,.08); for(let x=FIELD.x+18;x<FIELD.x+FIELD.w;x+=34) g.lineBetween(x,FIELD.y+10,x+Math.sin(x)*8,FIELD.y+FIELD.h-10); for(let i=0;i<9;i++){ const x=FIELD.x+62+i*54+(i%2?12:-10), y=FIELD.y+54+(i%4)*92; g.fillStyle(0xffffff,.035).fillCircle(x,y,16+(i%2)*5); g.fillStyle(0x000000,.16).fillCircle(x+6,y+4,9+(i%2)*3); } }
   private drawCore(g: Phaser.GameObjects.Graphics){ g.fillStyle(0x2b3947).fillRoundedRect(CORE_X-22,HERO_HOME_Y-34,34,68,8); g.fillStyle(0x5fe2ff).fillRect(CORE_X-14,HERO_HOME_Y-22,10,44); g.fillStyle(0x5fe2ff,.25).fillCircle(CORE_X-9,HERO_HOME_Y,20); }
-  private drawCharacterForeground(g: Phaser.GameObjects.Graphics){ this.drawSlashes(g); this.drawEnemyBars(g); this.drawHudBars(g); }
+  private drawCharacterForeground(g: Phaser.GameObjects.Graphics){ this.drawSlashes(g); this.drawEnemyBars(g); }
   private drawEnemyBars(g: Phaser.GameObjects.Graphics){ for(const e of this.enemies.slice().sort((a,b)=>a.y-b.y)){ if(e.hp<e.maxHp) this.drawMiniBar(g,e.x,e.y-(e.type==='warden'?34:26),e.type==='warden'?42:28,e.hp/e.maxHp,0xff7a6b); } }
   private drawMiniBar(g:Phaser.GameObjects.Graphics,x:number,y:number,w:number,ratio:number,color:number){ g.fillStyle(0x000000,.45).fillRect(Math.round(x-w/2),Math.round(y),w,4); g.fillStyle(color).fillRect(Math.round(x-w/2),Math.round(y),w*clamp(ratio,0,1),4); }
   private drawProjectiles(g:Phaser.GameObjects.Graphics){ for(const p of this.projectiles){ g.fillStyle(Phaser.Display.Color.HexStringToColor(p.color).color, clamp(p.life/.35,.35,1)).fillCircle(p.x,p.y,p.radius); g.lineStyle(1.2,0xffffff,.45).lineBetween(p.x-p.vx*.02,p.y-p.vy*.02,p.x+p.vx*.005,p.y+p.vy*.005); } }
@@ -380,7 +398,6 @@ export class GameScene extends Phaser.Scene {
     g.lineStyle(2,0x78eaff,.16).strokeRoundedRect(16,TOP_H+76,W-32,BOT_H-88,24);
     for(const c of this.chips) this.drawChip(g,c);
     for(const shard of this.chipShards) this.drawChipShard(g, shard);
-    this.drawPointerTrail(g);
   }
 
 
@@ -493,8 +510,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawParticles(g:Phaser.GameObjects.Graphics){ for(const p of this.particles){ const a=clamp(p.life/p.maxLife,0,1); g.fillStyle(Phaser.Display.Color.HexStringToColor(p.color).color,a).fillCircle(p.x,p.y,p.size*(.6+a)); } }
-  private drawOverlay(g:Phaser.GameObjects.Graphics){ this.overlay.removeAll(true); if(this.state.status==='start') this.drawStartOverlay(g); if(this.state.status==='choice') this.drawChoiceOverlay(g); if(this.state.status==='win'||this.state.status==='lose') this.drawResultOverlay(g); }
-  private overlayText(x:number,y:number,text:string,size:number,color:string,style='900',origin=.5){ const t=this.add.text(x,y,text,{fontFamily:'system-ui, sans-serif',fontSize:`${size}px`,fontStyle:style,color,align:'center',wordWrap:{width:470}}).setOrigin(origin).setDepth(40); this.overlay.add(t); return t; }
+  private drawOverlay(g:Phaser.GameObjects.Graphics){ this.overlay.removeAll(true); if(this.state.status==='start') this.drawStartOverlay(g); if(this.state.status==='choice') this.drawChoiceOverlay(g); if(this.state.status==='win'||this.state.status==='lose') this.drawResultOverlay(g); if(this.state.battleBanner>0 && this.state.status==='running') this.drawBattleBanner(g); }
+  private overlayText(x:number,y:number,text:string,size:number,color:string,style='900',origin=.5){ const t=this.add.text(x,y,text,{fontFamily:'system-ui, sans-serif',fontSize:`${size}px`,fontStyle:style,color,align:'center',wordWrap:{width:470}}).setOrigin(origin).setDepth(DEPTH.OVERLAY_TEXT); this.overlay.add(t); return t; }
+  private drawBattleBanner(g: Phaser.GameObjects.Graphics) {
+    const progress = clamp(this.state.battleBanner / 1.8, 0, 1);
+    const a = Math.min(1, this.state.battleBanner * 1.35);
+    const pulse = 1 + Math.sin(this.state.time * 18) * 0.018;
+    const w = 324 * pulse;
+    const h = 66 * pulse;
+    const x = W / 2 - w / 2;
+    const y = 82 - (1 - progress) * 10;
+    g.fillStyle(0x02050a, .32 * a).fillRect(0, 0, W, TOP_H);
+    g.fillStyle(0x06111c, .88 * a).fillRoundedRect(x, y, w, h, 20);
+    g.fillStyle(0xfff3a8, .10 * a).fillRoundedRect(x + 8, y + 8, w - 16, h - 16, 15);
+    g.lineStyle(4, 0xfff3a8, .18 * a).strokeRoundedRect(x - 5, y - 5, w + 10, h + 10, 24);
+    g.lineStyle(2.5, 0xfff3a8, .82 * a).strokeRoundedRect(x, y, w, h, 20);
+    g.lineStyle(1.5, 0x7ff0ff, .58 * a).strokeRoundedRect(x + 10, y + 10, w - 20, h - 20, 14);
+    g.lineStyle(2, 0xffffff, .28 * a).lineBetween(x + 28, y + h / 2, x + 88, y + h / 2).lineBetween(x + w - 88, y + h / 2, x + w - 28, y + h / 2);
+  }
+
   private drawStartOverlay(g:Phaser.GameObjects.Graphics){
     g.fillStyle(0x02050a,.78).fillRect(0,0,W,H);
     g.fillStyle(0x00e7ff,.08).fillTriangle(0,0,W,110,0,TOP_H+130);
@@ -542,5 +576,5 @@ export class GameScene extends Phaser.Scene {
     this.overlayText(W/2,374,'터치 / Space / R 로 다시 플레이',15,'rgba(232,251,255,.86)','800');
   }
 
-  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText('좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText('가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0){ this.overlayText(W/2,124,this.state.battleBannerText,23,'#fff3a8'); } }
+  private updateHudTexts(){ this.hud.timer.setText(String(Math.ceil(Math.max(0,this.state.runTime-this.state.time))).padStart(2,'0')+'s').setVisible(this.state.status!=='start'); this.hud.battle.setText(`BATTLE ${this.state.battleIndex}  ENEMIES ${this.state.battleAlive}/${this.state.battleSize}`).setVisible(this.state.status!=='start'); this.hud.score.setText('K '+this.state.kills+'  S '+this.state.score).setVisible(this.state.status!=='start'); this.hud.combo.setText(this.state.combo>0?'x'+this.state.combo:'').setVisible(this.state.combo>0); this.hud.sense.setText(this.state.slashSenseTime>0&&this.state.slashSenseText?'인식: '+this.state.slashSenseText:''); this.hud.coreLabel.setText('CORE'); this.hud.xpLabel.setText('LV '+this.state.level); this.hud.overdriveLabel.setText('OVERDRIVE'); this.hud.panelTitle.setText('DIRECTIVE SLICE PANEL'); this.hud.panelHelp1.setText('좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화'); this.hud.panelHelp2.setText('가로+세로=십자 / 반대 대각 콤보=X베기'); if(this.state.battleBanner>0 && this.state.status==='running'){ this.overlayText(W/2,124,this.state.battleBannerText,23,'#fff3a8'); } }
 }
