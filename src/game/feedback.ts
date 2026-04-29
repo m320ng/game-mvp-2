@@ -38,3 +38,11 @@ export function upgradeCardTextLayout(cardY: number) {
     description: { xOffset: 70, y: cardY + 55 + baselineCorrection, origin: [0, 0.5] as const },
   };
 }
+
+
+export function directivePanelHelpText(_transientActive = false) {
+  return {
+    help1: '좌/우/상/하/대각 방향 구분 · 길이별 위력/범위 변화',
+    help2: '가로+세로=십자 / 반대 대각 콤보=X베기',
+  };
+}

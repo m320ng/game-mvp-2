@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEPTH } from '../src/game/constants';
-import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout, upgradeCardTextLayout } from '../src/game/feedback';
+import { battleBannerLayout, comboFeedbackText, multiCoreFeedbackText, transientMessageLayout, upgradeCardTextLayout, directivePanelHelpText } from '../src/game/feedback';
 
 describe('feedback helpers', () => {
   it('formats visible combo tiers for chained cuts', () => {
@@ -24,6 +24,14 @@ describe('feedback helpers', () => {
     expect(later.w).toBe(early.w);
     expect(later.h).toBe(early.h);
     expect(early.textY).toBe(early.y + early.h / 2 - 2);
+  });
+
+
+
+  it('keeps directive panel help text independent from transient feedback', () => {
+    expect(directivePanelHelpText(true)).toEqual(directivePanelHelpText(false));
+    expect(directivePanelHelpText(true).help1).toContain('좌/우/상/하/대각');
+    expect(directivePanelHelpText(true).help2).toContain('가로+세로=십자');
   });
 
   it('positions upgrade card text around visual centers with baseline correction', () => {
