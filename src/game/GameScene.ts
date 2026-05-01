@@ -4,7 +4,7 @@ import { analyzeGesture, lengthProfile, slashLabel } from './gesture';
 import { clamp, dist, easeOutCubic, lerp, rand, randi, segmentCircle } from './math';
 import { TonePlayer } from './audio';
 import { chipPalette, createChipShards } from './chipShards';
-import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, registerGeneratedCharacterSprites } from './characterSprites';
+import { CHARACTER_SPRITE_SPECS, characterAnimationKey, characterTextureKey, heroAnimationTextureKey, preloadCharacterSpriteAssets, registerCharacterSprites } from './characterSprites';
 import type { Chip, ChipShard, Enemy, EnemyType, FloatText, GameState, GestureInfo, Hero, HeroSkillPoint, LastGesture, Particle, Point, PointerState, Projectile, Slash, Upgrade } from './types';
 
 const ENEMY_STATS: Record<EnemyType, { hp:number; speed:number; cooldown:number; damage:number; range:number; radius:number; score:number; xp:number; mode:'ranged'|'melee'; projectileSpeed?:number; projectileSize?:number; projectileColor?:string }> = {
@@ -42,8 +42,12 @@ export class GameScene extends Phaser.Scene {
 
   constructor() { super('GameScene'); }
 
+  preload() {
+    preloadCharacterSpriteAssets(this);
+  }
+
   create() {
-    registerGeneratedCharacterSprites(this);
+    registerCharacterSprites(this);
     this.g = this.add.graphics().setDepth(0);
     this.fx = this.add.graphics().setDepth(5);
     this.ui = this.add.container(0, 0);
@@ -215,7 +219,7 @@ export class GameScene extends Phaser.Scene {
 
   private syncHeroSprite(visible: boolean) {
     if (!this.heroSprite) {
-      this.heroSprite = this.add.sprite(this.hero.x, this.hero.y, characterTextureKey('hero'), 0).setOrigin(0.5, 0.78).setDepth(3.2);
+      this.heroSprite = this.add.sprite(this.hero.x, this.hero.y, heroAnimationTextureKey('idle'), 0).setOrigin(0.5, 0.78).setDepth(3.2);
       this.heroSprite.setScale(CHARACTER_SPRITE_SPECS.hero.scale);
     }
     this.heroSprite.setVisible(visible);
@@ -237,15 +241,22 @@ export class GameScene extends Phaser.Scene {
 
   private syncHeroAfterimages(visible: boolean) {
     while (this.heroTrailSprites.length < this.hero.trail.length) {
-      this.heroTrailSprites.push(this.add.image(0, 0, characterTextureKey('hero'), 8).setOrigin(0.5, 0.78).setDepth(2.8).setScale(CHARACTER_SPRITE_SPECS.hero.scale).setTint(0x9ff6ff));
+      this.heroTrailSprites.push(this.add.image(0, 0, characterTextureKey('hero'), 0).setOrigin(0.5, 0.78).setDepth(2.8).setScale(CHARACTER_SPRITE_SPECS.hero.scale).setTint(0x9ff6ff));
     }
     while (this.heroTrailSprites.length > this.hero.trail.length) this.heroTrailSprites.pop()?.destroy();
+    const heroTexture = this.heroSprite?.texture.key ?? characterTextureKey('hero');
+    const heroFrame = this.heroSprite?.frame.name ?? 0;
     for (let i = 0; i < this.heroTrailSprites.length; i++) {
       const trail = this.hero.trail[i];
       const sprite = this.heroTrailSprites[i];
       sprite.setVisible(visible && !!trail);
       if (!visible || !trail) continue;
-      sprite.setPosition(trail.x, trail.y).setFlipX(this.hero.facing < 0).setAlpha(clamp(trail.life / .18, 0, 1) * .35).setDepth(2.6 + trail.y / 1000);
+      sprite
+        .setTexture(heroTexture, heroFrame)
+        .setPosition(trail.x, trail.y)
+        .setFlipX(this.hero.facing < 0)
+        .setAlpha(clamp(trail.life / .18, 0, 1) * .35)
+        .setDepth(2.6 + trail.y / 1000);
     }
   }
 

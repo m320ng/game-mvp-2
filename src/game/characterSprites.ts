@@ -22,21 +22,44 @@ export interface CharacterSpriteSpec {
   states: Record<string, AnimationFrameRange>;
 }
 
+export interface HeroSpriteStripSpec {
+  sourcePath: string;
+  frames: number;
+  framePadding: number;
+}
+
+export interface OpaqueColumnSegment {
+  start: number;
+  end: number;
+  width: number;
+}
+
 const FRAME_W = 32;
 const FRAME_H = 32;
+const HERO_FRAME_H = 86;
+const HERO_FRAME_W = 96;
+const HERO_SCALE = 0.72;
+const HERO_STATES: HeroAnimationState[] = ['idle', 'run', 'slash', 'hit'];
+
+export const HERO_SPRITE_STRIPS: Record<HeroAnimationState, HeroSpriteStripSpec> = {
+  idle: { sourcePath: '/assets/characters/knight-1/idle.png', frames: 4, framePadding: 8 },
+  run: { sourcePath: '/assets/characters/knight-1/run.png', frames: 7, framePadding: 8 },
+  slash: { sourcePath: '/assets/characters/knight-1/attack-3.png', frames: 4, framePadding: 10 },
+  hit: { sourcePath: '/assets/characters/knight-1/hurt.png', frames: 2, framePadding: 8 },
+};
 
 export const CHARACTER_SPRITE_SPECS = {
   hero: {
     kind: 'hero',
-    frameWidth: FRAME_W,
-    frameHeight: FRAME_H,
-    frameCount: 14,
-    scale: 1.62,
+    frameWidth: HERO_FRAME_W,
+    frameHeight: HERO_FRAME_H,
+    frameCount: 7,
+    scale: HERO_SCALE,
     states: {
       idle: { from: 0, to: 3, frameRate: 5, repeat: -1 },
-      run: { from: 4, to: 7, frameRate: 10, repeat: -1 },
-      slash: { from: 8, to: 11, frameRate: 16, repeat: 0 },
-      hit: { from: 12, to: 13, frameRate: 12, repeat: 0 },
+      run: { from: 0, to: 6, frameRate: 10, repeat: -1 },
+      slash: { from: 0, to: 3, frameRate: 16, repeat: 0 },
+      hit: { from: 0, to: 1, frameRate: 12, repeat: 0 },
     },
   },
   scout: enemySpec('scout', 1.38),
@@ -47,7 +70,15 @@ export const CHARACTER_SPRITE_SPECS = {
 } satisfies Record<CharacterKind, CharacterSpriteSpec>;
 
 export function characterTextureKey(kind: CharacterKind) {
-  return `generated-character-${kind}`;
+  return kind === 'hero' ? heroAnimationTextureKey('idle') : `generated-character-${kind}`;
+}
+
+export function heroStripTextureKey(state: HeroAnimationState) {
+  return `hero-strip-${state}`;
+}
+
+export function heroAnimationTextureKey(state: HeroAnimationState) {
+  return `hero-sheet-${state}`;
 }
 
 export function characterAnimationKey(kind: CharacterKind, state: CharacterAnimationState) {
@@ -58,8 +89,142 @@ export function listCharacterAnimations(kind: CharacterKind) {
   return Object.keys(CHARACTER_SPRITE_SPECS[kind].states);
 }
 
+export function preloadCharacterSpriteAssets(scene: Phaser.Scene) {
+  for (const state of HERO_STATES) {
+    const strip = HERO_SPRITE_STRIPS[state];
+    const key = heroStripTextureKey(state);
+    if (!scene.textures.exists(key)) scene.load.image(key, strip.sourcePath);
+  }
+}
+
+export function registerCharacterSprites(scene: Phaser.Scene) {
+  registerHeroCharacterSprites(scene);
+  registerGeneratedEnemySprites(scene);
+}
+
 export function registerGeneratedCharacterSprites(scene: Phaser.Scene) {
+  registerCharacterSprites(scene);
+}
+
+export function extractOpaqueColumnSegments(columns: boolean[]): OpaqueColumnSegment[] {
+  const segments: OpaqueColumnSegment[] = [];
+  let start = -1;
+
+  for (let index = 0; index <= columns.length; index += 1) {
+    const opaque = columns[index] ?? false;
+    if (opaque && start === -1) {
+      start = index;
+      continue;
+    }
+    if (!opaque && start !== -1) {
+      segments.push({ start, end: index - 1, width: index - start });
+      start = -1;
+    }
+  }
+
+  return segments;
+}
+
+function registerHeroCharacterSprites(scene: Phaser.Scene) {
+  for (const state of HERO_STATES) {
+    const strip = HERO_SPRITE_STRIPS[state];
+    const animation = CHARACTER_SPRITE_SPECS.hero.states[state];
+    const textureKey = heroAnimationTextureKey(state);
+    const animationKey = characterAnimationKey('hero', state);
+
+    if (!scene.textures.exists(textureKey)) {
+      const sourceKey = heroStripTextureKey(state);
+      if (!scene.textures.exists(sourceKey)) throw new Error(`Missing hero sprite strip: ${sourceKey}`);
+      const sheet = buildHeroAnimationSheet(scene, sourceKey, strip.frames, strip.framePadding);
+      scene.textures.addSpriteSheet(textureKey, sheet as unknown as HTMLImageElement, {
+        frameWidth: sheet.width / strip.frames,
+        frameHeight: sheet.height,
+        margin: 0,
+        spacing: 0,
+      });
+    }
+
+    if (scene.anims.exists(animationKey)) continue;
+    scene.anims.create({
+      key: animationKey,
+      frames: scene.anims.generateFrameNumbers(textureKey, { start: animation.from, end: animation.to }),
+      frameRate: animation.frameRate,
+      repeat: animation.repeat,
+    });
+  }
+}
+
+function buildHeroAnimationSheet(
+  scene: Phaser.Scene,
+  sourceKey: string,
+  expectedFrames: number,
+  framePadding: number,
+) {
+  const source = scene.textures.get(sourceKey).getSourceImage() as CanvasImageSource & { width: number; height: number };
+  const columns = readOpaqueColumns(source);
+  const spans = normalizeFrameSegments(columns, expectedFrames);
+  const frameWidth = Math.max(...spans.map((span) => span.width)) + framePadding * 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = frameWidth * spans.length;
+  canvas.height = source.height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Unable to create hero sprite sheet canvas');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  spans.forEach((span, index) => {
+    const destX = index * frameWidth + Math.floor((frameWidth - span.width) / 2);
+    ctx.drawImage(source, span.start, 0, span.width, source.height, destX, 0, span.width, source.height);
+  });
+
+  return canvas;
+}
+
+function normalizeFrameSegments(columns: boolean[], expectedFrames: number) {
+  const segments = extractOpaqueColumnSegments(columns);
+  if (segments.length === expectedFrames) return segments;
+  return splitStripEvenly(columns.length, expectedFrames);
+}
+
+function splitStripEvenly(totalWidth: number, frames: number): OpaqueColumnSegment[] {
+  const segments: OpaqueColumnSegment[] = [];
+  for (let index = 0; index < frames; index += 1) {
+    const start = Math.round((index * totalWidth) / frames);
+    const end = Math.round(((index + 1) * totalWidth) / frames) - 1;
+    segments.push({ start, end, width: end - start + 1 });
+  }
+  return segments;
+}
+
+function readOpaqueColumns(source: CanvasImageSource & { width: number; height: number }) {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Unable to inspect hero sprite pixels');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0);
+
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const columns = new Array<boolean>(width).fill(false);
+
+  for (let x = 0; x < width; x += 1) {
+    for (let y = 0; y < height; y += 1) {
+      if (data[(y * width + x) * 4 + 3] > 0) {
+        columns[x] = true;
+        break;
+      }
+    }
+  }
+
+  return columns;
+}
+
+function registerGeneratedEnemySprites(scene: Phaser.Scene) {
   for (const kind of Object.keys(CHARACTER_SPRITE_SPECS) as CharacterKind[]) {
+    if (kind === 'hero') continue;
     const spec = CHARACTER_SPRITE_SPECS[kind];
     const key = characterTextureKey(kind);
     if (!scene.textures.exists(key)) {
